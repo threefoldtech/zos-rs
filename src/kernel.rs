@@ -84,7 +84,7 @@ mod test {
 
     #[test]
     fn test_parse_params() {
-        let content = "intel_iommu=on kvm-intel.nested=1 console=ttyS1,115200n8 console=tty1 consoleblank=0 earlyprintk=serial,ttyS1,115200n8 loglevel=7 console=ttyS1,115200n8 zos-debug zos-debug-vm farmer_id=11 runmode=dev version=v3 nomodeset";
+        let content = "intel_iommu=on kvm-intel.nested=1 console=ttyS1,115200n8 console=\"tty1\" consoleblank=0 earlyprintk=serial,ttyS1,115200n8 with_spaces=\"with spaces\" loglevel=7 console=ttyS1,115200n8 zos-debug zos-debug-vm farmer_id=\"11\" runmode=dev version=v3 nomodeset";
         let params = parse_params(content.into());
         let console_values = params.values("console").unwrap();
         assert_eq!(console_values.len(), 3);
@@ -102,6 +102,7 @@ mod test {
             &vec![String::from("1")]
         );
 
-        assert_eq!(params.value("farmer_id").unwrap(), String::from("11"));
+        assert_eq!(params.value("farmer_id"), Some("11"));
+        assert_eq!(params.value("with_spaces"), Some("with spaces"))
     }
 }
