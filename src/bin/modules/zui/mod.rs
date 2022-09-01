@@ -9,23 +9,27 @@ use std::time::{Duration, Instant};
 use tui::backend::{Backend, CrosstermBackend};
 use tui::Terminal;
 
-use crate::app::{App, Stubs};
-use crate::ui;
+use app::App;
 
-pub async fn run(
-    stubs: Stubs,
-    tick_rate: Duration,
-    enhanced_graphics: bool,
-) -> Result<(), Box<dyn Error>> {
+mod app;
+mod ui;
+
+pub async fn run() -> Result<(), Box<dyn Error>> {
+    // initialize stubs
+    let client = rbus::Client::new("redis://0.0.0.0:6379").await.unwrap();
+
+    let tick_rate = Duration::from_millis(250);
+
     // setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+
     // create app and run it
-    let app = App::new(stubs, enhanced_graphics);
-    // tokio::spawn(async move { app.poll_version() });
+    let app = App::new(client);
+    // spawn poll services
     app.poll_version().await;
     app.poll_reserved_stream().await;
     app.poll_cpu_usage().await;

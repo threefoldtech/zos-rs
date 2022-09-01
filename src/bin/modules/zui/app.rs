@@ -1,27 +1,27 @@
 use anyhow::Result;
-use rbus::client::Receiver;
+use rbus::{client::Receiver, Client};
 
-use crate::zos_traits::{
-    Capacity, ExitDevice, IdentityManagerStub, NetlinkAddresses, NetworkerStub, OptionPublicConfig,
-    RegistrarStub, StatisticsStub, SystemMonitorStub, Version, VersionMonitorStub, ZOSTimesStat,
-    ZOSVirtualMemory,
+use zos::{
+    bus::api::{self, NetlinkAddresses},
+    {
+        app::flags,
+        bus::types::{
+            net::{ExitDevice, OptionPublicConfig},
+            stats::{Capacity, TimesStat, VirtualMemory},
+            version::Version,
+        },
+        env,
+    },
 };
 
-pub struct Stubs {
-    pub identity_manager: IdentityManagerStub,
-    pub registrar: RegistrarStub,
-    pub version_monitor: VersionMonitorStub,
-    pub statistics: StatisticsStub,
-    pub sys_monitor: SystemMonitorStub,
-    pub network: NetworkerStub,
-}
 use std::sync::{Arc, Mutex};
 pub struct App {
-    pub stubs: Stubs,
+    pub client: Client,
     pub node_id: Result<u32, rbus::protocol::Error>,
     pub farm_id: Result<u32, rbus::protocol::Error>,
     pub exit_device: Result<ExitDevice, rbus::protocol::Error>,
     pub farm_name: Result<String, rbus::protocol::Error>,
+    pub cache_disk: bool,
     pub should_quit: bool,
     pub version: Arc<Mutex<String>>,
     pub used_mem_percent: Arc<Mutex<f64>>,
@@ -31,15 +31,17 @@ pub struct App {
     pub dmz_addresses: Arc<Mutex<String>>,
     pub ygg_addresses: Arc<Mutex<String>>,
     pub pub_addresses: Arc<Mutex<String>>,
+    pub running_mode: String,
 }
 
 impl App {
-    pub fn new(stubs: Stubs, enhanced_graphics: bool) -> App {
+    pub fn new(client: Client) -> App {
         App {
-            stubs,
+            client,
             node_id: Ok(0),
             farm_id: Ok(0),
             farm_name: Ok(String::from("")),
+            cache_disk: false,
             should_quit: false,
             version: Arc::new(Mutex::new(String::from("0.0.0"))),
             capacity: Arc::new(Mutex::new(Capacity {
@@ -55,11 +57,8 @@ impl App {
             dmz_addresses: Arc::new(Mutex::new(String::from("Not Configured"))),
             ygg_addresses: Arc::new(Mutex::new(String::from("Not Configured"))),
             pub_addresses: Arc::new(Mutex::new(String::from("No public config"))),
-            exit_device: Ok(ExitDevice {
-                is_single: false,
-                is_dual: false,
-                as_dual_interface: String::from(""),
-            }),
+            exit_device: Ok(ExitDevice::Unknown),
+            running_mode: String::from("unknown"),
         }
     }
 
@@ -72,8 +71,9 @@ impl App {
         }
     }
     pub async fn poll_version(&self) {
+        let version_monitor = api::VersionMonitorStub::from(self.client.clone());
         let mut recev: Receiver<Version> = loop {
-            match self.stubs.version_monitor.version().await {
+            match version_monitor.version().await {
                 Ok(recev) => {
                     break recev;
                 }
@@ -103,8 +103,9 @@ impl App {
         });
     }
     pub async fn poll_memory_usage(&self) {
-        let mut recev: Receiver<ZOSVirtualMemory> = loop {
-            match self.stubs.sys_monitor.memory().await {
+        let sys_monitor = api::SystemMonitorStub::from(self.client.clone());
+        let mut recev: Receiver<VirtualMemory> = loop {
+            match sys_monitor.memory().await {
                 Ok(recev) => {
                     break recev;
                 }
@@ -134,8 +135,9 @@ impl App {
         });
     }
     pub async fn poll_cpu_usage(&self) {
-        let mut recev: Receiver<ZOSTimesStat> = loop {
-            match self.stubs.sys_monitor.cpu().await {
+        let sys_monitor = api::SystemMonitorStub::from(self.client.clone());
+        let mut recev: Receiver<TimesStat> = loop {
+            match sys_monitor.cpu().await {
                 Ok(recev) => {
                     break recev;
                 }
@@ -166,8 +168,9 @@ impl App {
     }
 
     pub async fn poll_reserved_stream(&self) {
+        let statistics = api::StatisticsStub::from(self.client.clone());
         let mut recev: Receiver<Capacity> = loop {
-            match self.stubs.statistics.reserved_stream().await {
+            match statistics.reserved().await {
                 Ok(recev) => {
                     break recev;
                 }
@@ -198,8 +201,9 @@ impl App {
     }
 
     pub async fn poll_zos_addresses(&self) {
+        let network = api::NetworkerStub::from(self.client.clone());
         let mut recev: Receiver<NetlinkAddresses> = loop {
-            match self.stubs.network.zos_addresses().await {
+            match network.zos_addresses().await {
                 Ok(recev) => {
                     break recev;
                 }
@@ -225,8 +229,7 @@ impl App {
                     };
                     let mut zos_addresses_str = String::from("");
                     for address in zos_addresses.iter() {
-                        zos_addresses_str =
-                            format!("{} {}", &zos_addresses_str, address.to_string())
+                        zos_addresses_str = format!("{} {}", &zos_addresses_str, address)
                     }
                     *zos_addresses_state.lock().unwrap() = zos_addresses_str.trim().to_string();
                 }
@@ -234,8 +237,9 @@ impl App {
         });
     }
     pub async fn poll_dmz_addresses(&self) {
+        let network = api::NetworkerStub::from(self.client.clone());
         let mut recev: Receiver<NetlinkAddresses> = loop {
-            match self.stubs.network.dmz_addresses().await {
+            match network.dmz_addresses().await {
                 Ok(recev) => {
                     break recev;
                 }
@@ -270,8 +274,9 @@ impl App {
         });
     }
     pub async fn poll_ygg_addresses(&self) {
+        let network = api::NetworkerStub::from(self.client.clone());
         let mut recev: Receiver<NetlinkAddresses> = loop {
-            match self.stubs.network.ygg_addresses().await {
+            match network.ygg_addresses().await {
                 Ok(recev) => {
                     break recev;
                 }
@@ -306,8 +311,9 @@ impl App {
         });
     }
     pub async fn poll_public_addresses(&self) {
+        let network = api::NetworkerStub::from(self.client.clone());
         let mut recev: Receiver<OptionPublicConfig> = loop {
-            match self.stubs.network.public_addresses().await {
+            match network.public_addresses().await {
                 Ok(recev) => {
                     break recev;
                 }
@@ -331,14 +337,17 @@ impl App {
                         },
                         None => continue,
                     };
-                    if !pub_addresses.has_public_config {
+                    let mut addresses = String::from("");
+                    if !pub_addresses.is_set {
                         *pub_addresses_state.lock().unwrap() = String::from("No public config");
                     } else {
-                        *pub_addresses_state.lock().unwrap() = format!(
-                            "{} {}",
-                            pub_addresses.ipv4.to_string(),
-                            pub_addresses.ipv6.to_string()
-                        );
+                        if let Some(ipv4) = pub_addresses.config.ipv4 {
+                            addresses = format!("{}", ipv4);
+                        }
+                        if let Some(ipv6) = pub_addresses.config.ipv6 {
+                            addresses = format!("{} {}", addresses, ipv6);
+                        }
+                        *pub_addresses_state.lock().unwrap() = addresses;
                     }
                 }
             }
@@ -346,9 +355,14 @@ impl App {
     }
     pub async fn on_tick(&mut self) {
         // Update progress
-        self.node_id = self.stubs.registrar.node_id().await;
-        self.farm_id = self.stubs.identity_manager.farm_id().await;
-        self.farm_name = self.stubs.identity_manager.farm().await;
-        self.exit_device = self.stubs.network.get_public_exit_device().await;
+        let registrar = api::RegistrarStub::from(self.client.clone());
+        self.node_id = registrar.node_id().await;
+        let identity_manager = api::IdentityManagerStub::from(self.client.clone());
+        self.farm_id = identity_manager.farm_id().await;
+        self.farm_name = identity_manager.farm().await;
+        let network = api::NetworkerStub::from(self.client.clone());
+        self.exit_device = network.get_public_exit_device().await;
+        self.cache_disk = flags::check(flags::Flags::LimitedCache);
+        self.running_mode = env::RUNTIME.mode.to_string();
     }
 }

@@ -1,22 +1,21 @@
-use std::env;
 use tui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Span, Spans},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap},
+    widgets::{Block, Borders, Paragraph, Row, Table, Wrap},
     Frame,
 };
 
-use crate::{app::App, zos_traits::Capacity};
+use super::app::App;
 
 pub fn draw<B: Backend>(f: &mut Frame<B>, app: &mut App) {
     let chunks = Layout::default()
         .constraints(
             [
-                Constraint::Percentage(20),
+                Constraint::Percentage(30),
                 Constraint::Percentage(40),
-                Constraint::Percentage(40),
+                Constraint::Percentage(30),
             ]
             .as_ref(),
         )
@@ -32,6 +31,10 @@ where
 {
     let info_style: Style = Style::default().fg(Color::Green);
     let error_style: Style = Style::default().fg(Color::Red);
+    let mut cache_disk = Span::styled("Ok", info_style);
+    if app.cache_disk {
+        cache_disk = Span::styled("no SSD disks detected", error_style);
+    }
     let node_id_span = match &app.node_id {
         Ok(node_id) => Span::styled(format!("{}", node_id), info_style),
         Err(err) => Span::styled(format!("{}", err), error_style),
@@ -46,11 +49,6 @@ where
     };
 
     let text = vec![
-        // Spans::from(""),
-        // Spans::from(r" ____  _____  ___"),
-        // Spans::from(r"(_   )(  _  )/ __)"),
-        // Spans::from(r" / /_  )(_)( \__ \"),
-        // Spans::from(r"(____)(_____)(___/"),
         Spans::from(vec![
             Span::from("Welcome to "),
             Span::styled("Zero-OS", Style::default().fg(Color::Yellow)),
@@ -73,7 +71,14 @@ where
                 format!(" {}", app.version.lock().unwrap()),
                 Style::default().fg(Color::Blue),
             ),
+            Span::raw("(mode: "),
+            Span::styled(
+                format!("{}", app.running_mode),
+                Style::default().fg(Color::Cyan),
+            ),
+            Span::raw(")"),
         ]),
+        Spans::from(vec![Span::raw("Cache Disk: "), cache_disk]),
     ];
     let block = Block::default().borders(Borders::ALL);
     let paragraph = Paragraph::new(text)
@@ -115,7 +120,7 @@ where
         .trim()
         .to_string();
     let exit_device = match &app.exit_device {
-        Ok(exit_device) => format!("{}", exit_device.to_string()),
+        Ok(exit_device) => format!("{}", exit_device),
         Err(err) => format!("{}", err),
     };
     let rows = vec![

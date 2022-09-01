@@ -1,12 +1,18 @@
 [package]
-name = "zui"
+name = "zos"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+path ="src/mod.rs"
+
+[[bin]]
+path = "src/bin/main.rs"
+name = "zos"
 
 [dependencies]
-rbus = {path="../rbus"}
+rbus = {git="https://github.com/threefoldtech/rbus", branch="main"}
 async-trait = "0.1.51"
 anyhow = "1.0.44"
 tokio = { version = "1.11.0", features = ["full"] }
@@ -14,7 +20,13 @@ tui = "0.18"
 crossterm = "0.23"
 serde = {version = "1.0", features = ["derive"] }
 log = "0.4"
-psutil = "3.2.2"
 ipnet = "2.5.0"
 bytes = "1.2.1"
-serde_with = "2.0.0"
+serde_bytes = "0.11.5"
+clap-v3 = "3.0.0-beta.1"
+lazy_static = "1.4.0"
+shlex = "1.1.0"
+[dev-dependencies]
+hex = "0.4.3"
+rmp-serde = "1.1.0"
+hexdump = "0.1.1"
