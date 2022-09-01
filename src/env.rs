@@ -13,7 +13,7 @@ lazy_static::lazy_static! {
 }
 
 // possible Running modes
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum RunMode {
     Dev,
     Qa,

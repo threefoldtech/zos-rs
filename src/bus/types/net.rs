@@ -73,7 +73,7 @@ impl IPMask {
         for v in self.0.iter() {
             let mut x = *v;
             while x > 0 {
-                x = x << 1;
+                x <<= 1;
                 size += 1;
             }
         }
@@ -139,16 +139,13 @@ struct GoIPNet {
 impl From<GoIPNet> for Option<IPNet> {
     fn from(o: GoIPNet) -> Self {
         match o.ip {
-            Some(ip) => match o.mask {
-                Some(mask) => Some(IPNet { ip, mask }),
-                None => None,
-            },
+            Some(ip) => o.mask.map(|mask| IPNet { ip, mask }),
             None => None,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum InterfaceType {
     #[serde(rename = "vlan")]
     VLan,

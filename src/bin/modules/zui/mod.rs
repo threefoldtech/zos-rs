@@ -68,9 +68,8 @@ async fn run_app<B: Backend>(
             .unwrap_or_else(|| Duration::from_secs(0));
         if crossterm::event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char(c) => app.on_key(c),
-                    _ => {}
+                if let KeyCode::Char(c) = key.code {
+                    app.on_key(c)
                 }
             }
         }

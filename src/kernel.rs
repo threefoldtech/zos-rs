@@ -14,11 +14,8 @@ impl Params {
     // if key exists but has no values, will return None. you can check if key exist with exists method
     pub fn values<S: AsRef<str>>(&self, k: S) -> Option<&Vec<String>> {
         match self.0.get(k.as_ref()) {
-            None => None,
-            Some(v) => match v {
-                None => None,
-                Some(v) => Some(v),
-            },
+            Some(Some(v)) => Some(v),
+            _ => None,
         }
     }
 
@@ -26,7 +23,7 @@ impl Params {
         match self.0.get(k.as_ref()) {
             None => None,
             Some(v) => match v {
-                Some(v) if v.len() > 0 => Some(v[v.len() - 1].as_str()),
+                Some(v) if !v.is_empty() => Some(v[v.len() - 1].as_str()),
                 _ => None,
             },
         }
@@ -37,7 +34,7 @@ fn parse_params(content: String) -> Params {
     let mut params_map = HashMap::new();
     if let Some(cmdline) = shlex::split(&content) {
         for option in cmdline {
-            let mut parts = option.splitn(2, "=").into_iter();
+            let mut parts = option.splitn(2, '=');
             // use this to make sure element exists
             let key = match parts.next() {
                 Some(key) => key,
@@ -96,6 +93,8 @@ mod test {
                 String::from("ttyS1,115200n8")
             ]
         );
+        assert_eq!(params.values("zos-debug-vm"), None);
+        assert_eq!(params.value("zos-debug-vm"), None);
         assert_eq!(params.exists("zos-debug-vm"), true);
         assert_eq!(
             params.values("kvm-intel.nested").unwrap(),

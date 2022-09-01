@@ -44,7 +44,7 @@ where
         Err(err) => Span::styled(format!("{}", err), error_style),
     };
     let farm_name_span = match &app.farm_name {
-        Ok(farm_name) => Span::styled(format!("{}", farm_name), info_style),
+        Ok(farm_name) => Span::styled(farm_name.to_string(), info_style),
         Err(err) => Span::styled(format!("{}", err), error_style),
     };
 
@@ -73,7 +73,7 @@ where
             ),
             Span::raw("(mode: "),
             Span::styled(
-                format!("{}", app.running_mode),
+                app.running_mode.to_string(),
                 Style::default().fg(Color::Cyan),
             ),
             Span::raw(")"),

@@ -63,11 +63,8 @@ impl App {
     }
 
     pub fn on_key(&mut self, c: char) {
-        match c {
-            'q' => {
-                self.should_quit = true;
-            }
-            _ => {}
+        if c == 'q' {
+            self.should_quit = true;
         }
     }
     pub async fn poll_version(&self) {
@@ -265,8 +262,7 @@ impl App {
                     };
                     let mut dmz_addresses_str = String::from("");
                     for address in dmz_addresses.iter() {
-                        dmz_addresses_str =
-                            format!("{} {}", &dmz_addresses_str, address.to_string())
+                        dmz_addresses_str = format!("{} {}", &dmz_addresses_str, address)
                     }
                     *dmz_addresses_state.lock().unwrap() = dmz_addresses_str.trim().to_string();
                 }
@@ -302,8 +298,7 @@ impl App {
                     };
                     let mut ygg_addresses_str = String::from("");
                     for address in ygg_addresses.iter() {
-                        ygg_addresses_str =
-                            format!("{} {}", &ygg_addresses_str, address.to_string())
+                        ygg_addresses_str = format!("{} {}", &ygg_addresses_str, address)
                     }
                     *ygg_addresses_state.lock().unwrap() = ygg_addresses_str.trim().to_string();
                 }
