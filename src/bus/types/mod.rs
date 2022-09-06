@@ -5,4 +5,5 @@
 /// those types.
 pub mod net;
 pub mod stats;
+pub mod storage;
 pub mod version;

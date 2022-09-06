@@ -1,6 +1,6 @@
+use crate::Unit;
 use serde::{Deserialize, Serialize};
 
-pub type Unit = u64;
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Capacity {
     #[serde(rename = "CRU")]

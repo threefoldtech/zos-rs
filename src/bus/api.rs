@@ -4,6 +4,7 @@ use rbus::{object, server::Sender};
 use crate::bus::types::{
     net::{ExitDevice, IPNet, OptionPublicConfig},
     stats::{Capacity, TimesStat, VirtualMemory},
+    storage,
     version::Version,
 };
 
@@ -72,4 +73,36 @@ pub trait Networker {
 
     #[rename("GetPublicExitDevice")]
     fn get_public_exit_device(&self) -> Result<ExitDevice>;
+}
+
+#[object(module = "flist", name = "flist", version = "0.0.1")]
+#[async_trait::async_trait]
+pub trait Flister {
+    /**
+     * // Mount mounts an flist located at url using the 0-db located at storage
+    // in a RO mode. note that there is no way u can unmount a ro flist because
+    // it can be shared by many users, it's then up to system to decide if the
+    // mount is not needed anymore and clean it up
+    Mount(name, url string, opt MountOptions) (path string, err error)
+
+    // UpdateMountSize change the mount size
+    UpdateMountSize(name string, limit gridtypes.Unit) (path string, err error)
+
+    // Umount a RW mount. this only unmounts the RW layer and remove the assigned
+    // volume.
+    Unmount(name string) error
+
+    // HashFromRootPath returns flist hash from a running g8ufs mounted with NamedMount
+    HashFromRootPath(name string) (string, error)
+
+    // FlistHash returns md5 of flist if available (requesting the hub)
+    FlistHash(url string) (string, error)
+
+    Exists(name string) (bool, error)
+     */
+
+    #[rename("Mount")]
+    async fn mount(name: String, url: String, options: storage::MountMode) -> Result<String>;
+
+    //todo: add the remaining methods
 }
