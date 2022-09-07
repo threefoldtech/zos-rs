@@ -78,31 +78,24 @@ pub trait Networker {
 #[object(module = "flist", name = "flist", version = "0.0.1")]
 #[async_trait::async_trait]
 pub trait Flister {
-    /**
-     * // Mount mounts an flist located at url using the 0-db located at storage
-    // in a RO mode. note that there is no way u can unmount a ro flist because
-    // it can be shared by many users, it's then up to system to decide if the
-    // mount is not needed anymore and clean it up
-    Mount(name, url string, opt MountOptions) (path string, err error)
-
-    // UpdateMountSize change the mount size
-    UpdateMountSize(name string, limit gridtypes.Unit) (path string, err error)
-
-    // Umount a RW mount. this only unmounts the RW layer and remove the assigned
-    // volume.
-    Unmount(name string) error
-
-    // HashFromRootPath returns flist hash from a running g8ufs mounted with NamedMount
-    HashFromRootPath(name string) (string, error)
-
-    // FlistHash returns md5 of flist if available (requesting the hub)
-    FlistHash(url string) (string, error)
-
-    Exists(name string) (bool, error)
-     */
-
+    /// create a new flist mount with unique name "name" and using the flist at url.
+    /// using the mount options options.
     #[rename("Mount")]
-    async fn mount(name: String, url: String, options: storage::MountMode) -> Result<String>;
+    async fn mount(name: String, url: String, options: storage::MountOptions) -> Result<String>;
 
-    //todo: add the remaining methods
+    /// unmount mount with name
+    #[rename("Unmount")]
+    async fn unmount(name: String) -> Result<()>;
+
+    /// return the hash of the flist used to create the mount `name`
+    #[rename("HashFromRootPath")]
+    async fn hash_of_mount(name: String) -> Result<String>;
+
+    /// return the hash of the flist at url
+    #[rename("FlistHash")]
+    async fn hash_of_flist(url: String) -> Result<String>;
+
+    /// exists checks if a mount with that name exists
+    #[rename("Exists")]
+    async fn exists(name: String) -> Result<bool>;
 }
