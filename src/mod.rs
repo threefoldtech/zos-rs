@@ -1,6 +1,7 @@
 pub mod app;
 pub mod bus;
 pub mod env;
+pub mod flist;
 pub mod kernel;
 
 // Unit is a size measuring unit 1 unit = 1 byte

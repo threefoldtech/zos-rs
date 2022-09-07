@@ -1,12 +1,12 @@
-use anyhow::Result;
-use rbus::{object, server::Sender};
-
 use crate::bus::types::{
     net::{ExitDevice, IPNet, OptionPublicConfig},
     stats::{Capacity, TimesStat, VirtualMemory},
     storage,
     version::Version,
 };
+use crate::Unit;
+use anyhow::Result;
+use rbus::{object, server::Sender};
 
 type FarmID = u32;
 
@@ -54,7 +54,7 @@ pub trait SystemMonitor {
 pub type NetlinkAddresses = Vec<IPNet>;
 #[object(module = "network", name = "network", version = "0.0.1")]
 #[async_trait::async_trait]
-pub trait Networker {
+pub trait Network {
     #[rename("ZOSAddresses")]
     #[stream]
     async fn zos_addresses(&self, rec: Sender<NetlinkAddresses>);
@@ -77,7 +77,7 @@ pub trait Networker {
 
 #[object(module = "flist", name = "flist", version = "0.0.1")]
 #[async_trait::async_trait]
-pub trait Flister {
+pub trait Flist {
     /// create a new flist mount with unique name "name" and using the flist at url.
     /// using the mount options options.
     #[rename("Mount")]
@@ -86,6 +86,10 @@ pub trait Flister {
     /// unmount mount with name
     #[rename("Unmount")]
     async fn unmount(name: String) -> Result<()>;
+
+    // UpdateMountSize change the mount size
+    #[rename("UpdateMountSize")]
+    async fn update(name: String, size: Unit) -> Result<String>;
 
     /// return the hash of the flist used to create the mount `name`
     #[rename("HashFromRootPath")]
