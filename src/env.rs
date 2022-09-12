@@ -94,7 +94,7 @@ fn default(run_mode: RunMode) -> Environment {
     }
 }
 
-fn get() -> Result<Environment> {
+pub fn get() -> Result<Environment> {
     let params = kernel::get();
     from_params(params)
 }
