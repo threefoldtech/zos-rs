@@ -33,6 +33,17 @@ semver = "1.0.13"
 nix = "0.25.0"
 uuid = { version = "1.1", features = ["v4"] }
 ioctls = "0.6"
+reqwest="0.11.11"
+http="0.2.8"
+execute = "0.2.11"
+md-5 = "0.10.4"
+hex = "0.4.3"
+base16ct = {version = "0.1.1", features = ["alloc"]}
+tempdir = "0.3.7"
+tempfile= "3.3.0"
+srmw = "0.1.1"
+filepath = "0.1.2"
+linux = "0.0.1"
 
 [dev-dependencies]
 hex = "0.4.3"

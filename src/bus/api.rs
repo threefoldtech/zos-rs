@@ -81,7 +81,12 @@ pub trait Flist {
     /// create a new flist mount with unique name "name" and using the flist at url.
     /// using the mount options options.
     #[rename("Mount")]
-    async fn mount(name: String, url: String, options: storage::MountOptions) -> Result<String>;
+    async fn mount(
+        &self,
+        name: String,
+        url: String,
+        options: storage::MountOptions,
+    ) -> Result<String>;
 
     /// unmount mount with name
     #[rename("Unmount")]
@@ -97,9 +102,13 @@ pub trait Flist {
 
     /// return the hash of the flist at url
     #[rename("FlistHash")]
-    async fn hash_of_flist(url: String) -> Result<String>;
+    async fn hash_of_flist(&self, url: &str) -> Result<String>;
 
     /// exists checks if a mount with that name exists
     #[rename("Exists")]
     async fn exists(name: String) -> Result<bool>;
+    #[rename("mountRO")]
+    async fn mount_ro(&self, url: &str, storage: &str) -> Result<String>;
+    #[rename("flist")]
+    async fn download_flist(&self, url: &str) -> Result<String>;
 }
