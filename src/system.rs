@@ -34,12 +34,23 @@ impl Command {
     }
 }
 
+impl Display for Command {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.cmd)?;
+        for arg in self.args.iter() {
+            write!(f, " {}", arg)?;
+        }
+
+        Ok(())
+    }
+}
+
 #[async_trait::async_trait]
 pub trait Executor {
     async fn run(&self, cmd: &Command) -> Result<Vec<u8>, ExecError>;
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 /// System is the default executor
 /// that uses the tokio::process module
 /// to implement the executor trait.
@@ -48,19 +59,19 @@ pub struct System;
 #[async_trait::async_trait]
 impl Executor for System {
     async fn run(&self, cmd: &Command) -> Result<Vec<u8>, ExecError> {
-        unimplemented!()
+        unimplemented!("executing command: {}", cmd);
     }
 }
 
 /// Mock implements the Executor trait
 /// but will be used for testing.
 #[cfg(test)]
-pub struct Mock;
+pub struct ExecutorMock;
 
 #[cfg(test)]
 #[async_trait::async_trait]
-impl Executor for Mock {
+impl Executor for ExecutorMock {
     async fn run(&self, cmd: &Command) -> Result<Vec<u8>, ExecError> {
-        unimplemented!()
+        unimplemented!("mock execution of command: {}", cmd);
     }
 }
