@@ -172,7 +172,7 @@ mod test {
         let path = Path::new("/dev/sda");
 
         assert!(devices.len() == 4);
-        assert!(matches!(devices[0].path(), path));
+        assert!(devices[0].path() == path);
         assert!(matches!(devices[0].filesystem(), Some(f) if f == "btrfs"));
         assert!(
             matches!(devices[1].label(), Some(l) if l == "5ecdbb3c-b687-4048-b505-7a6756c2de76")
@@ -209,7 +209,7 @@ mod test {
 
         let path = Path::new("/dev/sda");
 
-        assert!(matches!(device.path(), path));
+        assert!(device.path() == path);
         assert!(matches!(device.filesystem(), Some(f) if f == "btrfs"));
         assert!(matches!(device.label(), Some(l) if l == "aa8a31a4-cbe8-4615-a6fe-155a9418cd0a"));
     }

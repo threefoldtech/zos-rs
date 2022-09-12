@@ -79,16 +79,3 @@ impl Executor for System {
         unimplemented!("executing command: {}", cmd);
     }
 }
-
-// /// Mock implements the Executor trait
-// /// but will be used for testing.
-// #[cfg(test)]
-// pub struct ExecutorMock;
-
-// #[cfg(test)]
-// #[async_trait::async_trait]
-// impl Executor for ExecutorMock {
-//     async fn run(&self, cmd: &Command) -> Result<Vec<u8>, ExecError> {
-//         unimplemented!("mock execution of command: {}", cmd);
-//     }
-// }
