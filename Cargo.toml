@@ -26,6 +26,8 @@ serde_bytes = "0.11.5"
 clap-v3 = "3.0.0-beta.1"
 lazy_static = "1.4.0"
 shlex = "1.1.0"
+thiserror = "1.0.34"
+
 [dev-dependencies]
 hex = "0.4.3"
 rmp-serde = "1.1.0"

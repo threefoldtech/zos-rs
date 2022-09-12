@@ -3,6 +3,8 @@ pub mod bus;
 pub mod env;
 pub mod flist;
 pub mod kernel;
+pub mod storage;
+pub mod system;
 
 // Unit is a size measuring unit 1 unit = 1 byte
 pub type Unit = u64;
