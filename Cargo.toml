@@ -30,7 +30,6 @@ shlex = "1.1.0"
 thiserror = "1.0"
 mockall = "0.11"
 semver = "1.0.13"
-nix = "0.25.0"
 uuid = { version = "1.1", features = ["v4"] }
 reqwest="0.11.11"
 http="0.2.8"
@@ -42,7 +41,7 @@ tempdir = "0.3.7"
 tempfile= "3.3.0"
 srmw = "0.1.1"
 filepath = "0.1.2"
-linux = "0.0.1"
+nix = "0.25.0"
 
 [dev-dependencies]
 hex = "0.4.3"

@@ -5,9 +5,8 @@ use crate::env;
 use crate::Unit;
 use anyhow::{bail, Result};
 use execute::Execute;
-use linux::kty::MS_BIND;
-use linux::syscall;
 use md5::{Digest, Md5};
+use nix;
 use std::fs;
 use std::fs::File;
 use std::fs::Permissions;
@@ -97,7 +96,7 @@ where
                 if error_str.contains("No such file or directory (os error 2)") {
                     return Ok(());
                 } else if error_str.contains("transport endpoint is not connected") {
-                    return self.system.unmount(String::from(path), 0);
+                    return self.system.unmount(path);
                 } else {
                     bail!("failed to check mountpoint: {}", path)
                 }
@@ -105,8 +104,8 @@ where
         };
         Ok(())
     }
-    fn flist_mount_path(&self, hash: String) -> Result<PathBuf> {
-        let mountpath = Path::new(&self.ro).join(&hash);
+    fn flist_mount_path(&self, hash: &str) -> Result<PathBuf> {
+        let mountpath = Path::new(&self.ro).join(hash);
         if mountpath.parent() != Some(Path::new(&self.ro)) {
             bail!("invalid mount name")
         }
@@ -148,111 +147,28 @@ where
     }
     fn mount_bind(&self, name: String, ro: String) -> Result<bool> {
         let mountpoint = self.mountpath(name)?;
-        fs::create_dir_all(mountpoint)?;
+        fs::create_dir_all(&mountpoint)?;
         let permissions = Permissions::from_mode(0755);
-        fs::set_permissions(mountpoint, permissions)?;
-        let success = self.system.mount(
-            ro,
-            mountpoint.display().to_string(),
-            "bind".into(),
-            MS_BIND,
-            "".into(),
-        );
+        fs::set_permissions(&mountpoint, permissions)?;
+        self.system.mount(
+            Some(&ro),
+            &mountpoint.display().to_string(),
+            Some("bind"),
+            nix::mount::MsFlags::MS_BIND,
+            None,
+        )?;
         Ok(true)
     }
-}
+    async fn hash_of_flist(&self, url: &str) -> Result<String> {
+        let md5_url = format!("{url}.md5");
+        let res = reqwest::get(md5_url)
+            .await?
+            .text()
+            .await?
+            .trim()
+            .to_string();
 
-#[async_trait::async_trait]
-impl<A, S, C> Flist for FListDaemon<A, S, C>
-where
-    A: VolumeAllocator + Sync,
-    S: System + Sync,
-    C: Commander + Sync,
-{
-    // MountRO mounts an flist in read-only mode. This mount then can be shared between multiple rw mounts
-    // TODO: how to know that this ro mount is no longer used, hence can be unmounted and cleaned up?
-    async fn mount_ro(&self, url: &str, storage: &str) -> Result<String> {
-        // this should return always the flist mountpoint. which is used
-        // as a base for all RW mounts.
-        let hash = match self.hash_of_flist(url).await {
-            Ok(hash) => hash,
-            Err(_) => bail!("Failed to get flist hash"),
-        };
-        let mountpoint = self.flist_mount_path(hash)?;
-        let mountpoint = match mountpoint.to_str() {
-            Some(mountpoint) => mountpoint,
-            None => bail!("mountpoint is None"),
-        };
-        match self.valid(&mountpoint) {
-            Err(error) => {
-                if error.to_string().contains("path is already mounted") {
-                    return Ok(mountpoint.to_string());
-                } else {
-                    bail!("validating of mount point failed");
-                }
-            }
-            _ => {}
-        };
-
-        fs::create_dir_all(mountpoint)?;
-        if storage == "" {
-            let environ = env::get()?;
-            let storage = environ.storage_url;
-        }
-        let flist_path = self.download_flist(url).await?;
-        let log_name = hash + ".log";
-        let log_path = Path::new(&self.log).join(&log_name);
-
-        let args = vec![
-            "--cache".into(),
-            self.cache,
-            "--meta".into(),
-            flist_path,
-            "--storage-url".into(),
-            storage.into(),
-            "--daemon".into(),
-            "--log".into(),
-            log_path.display().to_string(),
-            // this is always read-only
-            "--ro".into(),
-            mountpoint.into(),
-        ];
-        self.commander.execute("g8ufs", args)?;
-        syscall::sync();
-        Ok(mountpoint.into())
-    }
-
-    async fn mount(&self, name: String, url: String, options: MountOptions) -> Result<String> {
-        let mountpoint = self.mountpath(name)?;
-        let mountpoint = match mountpoint.to_str() {
-            Some(mountpoint) => mountpoint,
-            None => bail!("mountpoint is None"),
-        };
-        match self.valid(&mountpoint) {
-            Err(error) => {
-                if error.to_string().contains("path is already mounted") {
-                    return Ok(mountpoint.to_string());
-                } else {
-                    bail!("validating of mount point failed");
-                }
-            }
-            _ => {}
-        };
-        //mountRO
-        //cleanup unused mounts
-        Ok(String::from("success"))
-    }
-
-    async fn unmount(name: String) -> Result<()> {
-        unimplemented!()
-    }
-
-    async fn update(name: String, size: crate::Unit) -> Result<String> {
-        unimplemented!()
-    }
-
-    async fn hash_of_mount(name: String) -> Result<String> {
-        unimplemented!()
+        Ok(res)
     }
     // downloadFlist downloads an flits from a URL
     // if the flist location also provide and md5 hash of the flist
@@ -283,17 +199,102 @@ where
         let body = reqwest::get(url).await?.text().await?;
         return self.save_flist(body);
     }
+    // MountRO mounts an flist in read-only mode. This mount then can be shared between multiple rw mounts
+    // TODO: how to know that this ro mount is no longer used, hence can be unmounted and cleaned up?
+    async fn mount_ro(&self, url: &str, storage: Option<String>) -> Result<String> {
+        // this should return always the flist mountpoint. which is used
+        // as a base for all RW mounts.
+        let hash = match self.hash_of_flist(url).await {
+            Ok(hash) => hash,
+            Err(_) => bail!("Failed to get flist hash"),
+        };
+        let mountpoint = self.flist_mount_path(&hash)?;
+        let mountpoint = match mountpoint.to_str() {
+            Some(mountpoint) => mountpoint,
+            None => bail!("mountpoint is None"),
+        };
+        match self.valid(&mountpoint) {
+            Err(error) => {
+                if error.to_string().contains("path is already mounted") {
+                    return Ok(mountpoint.to_string());
+                } else {
+                    bail!("validating of mount point failed");
+                }
+            }
+            _ => {}
+        };
 
-    async fn hash_of_flist(&self, url: &str) -> Result<String> {
-        let md5_url = format!("{url}.md5");
-        let res = reqwest::get(md5_url)
-            .await?
-            .text()
-            .await?
-            .trim()
-            .to_string();
+        fs::create_dir_all(mountpoint)?;
+        let storage = match storage {
+            Some(storage) => storage,
+            None => {
+                let environ = env::get()?;
+                environ.storage_url
+            }
+        };
 
-        Ok(res)
+        let flist_path = self.download_flist(url).await?;
+        let log_name = hash + ".log";
+        let log_path = Path::new(&self.log).join(&log_name);
+
+        let args = vec![
+            "--cache".into(),
+            self.cache.clone(),
+            "--meta".into(),
+            flist_path,
+            "--storage-url".into(),
+            storage.into(),
+            "--daemon".into(),
+            "--log".into(),
+            log_path.display().to_string(),
+            // this is always read-only
+            "--ro".into(),
+            mountpoint.into(),
+        ];
+        self.commander.execute("g8ufs", args)?;
+        nix::unistd::sync();
+        Ok(mountpoint.into())
+    }
+}
+
+#[async_trait::async_trait]
+impl<A, S, C> Flist for FListDaemon<A, S, C>
+where
+    A: VolumeAllocator + Sync,
+    S: System + Sync,
+    C: Commander + Sync,
+{
+    async fn mount(&self, name: String, url: String, options: MountOptions) -> Result<String> {
+        let mountpoint = self.mountpath(name)?;
+        let mountpoint = match mountpoint.to_str() {
+            Some(mountpoint) => mountpoint,
+            None => bail!("mountpoint is None"),
+        };
+        match self.valid(&mountpoint) {
+            Err(error) => {
+                if error.to_string().contains("path is already mounted") {
+                    return Ok(mountpoint.to_string());
+                } else {
+                    bail!("validating of mount point failed");
+                }
+            }
+            _ => {}
+        };
+        self.mount_ro(&url, options.storage).await?;
+        //cleanup unused mounts
+        Ok(String::from("success"))
+    }
+
+    async fn unmount(name: String) -> Result<()> {
+        unimplemented!()
+    }
+
+    async fn update(name: String, size: crate::Unit) -> Result<String> {
+        unimplemented!()
+    }
+
+    async fn hash_of_mount(name: String) -> Result<String> {
+        unimplemented!()
     }
 
     async fn exists(name: String) -> Result<bool> {
@@ -304,41 +305,33 @@ where
 pub trait System {
     fn mount(
         &self,
-        source: String,
-        target: String,
-        fstype: String,
-        flags: u64,
-        data: String,
-    ) -> Result<String>;
+        source: Option<&str>,
+        target: &str,
+        fstype: Option<&str>,
+        flags: nix::mount::MsFlags,
+        data: Option<&str>,
+    ) -> Result<()>;
 
     /// unmount mount with name
-    fn unmount(&self, target: String, flags: u64) -> Result<()>;
+    fn unmount(&self, target: &str) -> Result<()>;
 }
 struct DefaultSystem;
 impl System for DefaultSystem {
     fn mount(
         &self,
-        source: String,
-        target: String,
-        fstype: String,
-        flags: u64,
-        data: String,
-    ) -> Result<i32> {
-        let status = syscall::mount(source, target, fstype, flags, data);
-        if status == 0 {
-            return Ok(status);
-        } else {
-            return Err(status);
-        }
+        source: Option<&str>,
+        target: &str,
+        fstype: Option<&str>,
+        flags: nix::mount::MsFlags,
+        data: Option<&str>,
+    ) -> Result<()> {
+        nix::mount::mount(source, target, fstype, flags, data)?;
+        Ok(())
     }
 
-    fn unmount(&self, target: String, flags: u64) -> Result<i32> {
-        let status = syscall::umount(target, flags);
-        if status == 0 {
-            return Ok(status);
-        } else {
-            return Err(status);
-        }
+    fn unmount(&self, target: &str) -> Result<()> {
+        nix::mount::umount(target)?;
+        Ok(())
     }
 }
 
@@ -382,7 +375,7 @@ pub trait Commander {
 
 struct DefaultCommander;
 impl Commander for DefaultCommander {
-    fn execute(&self, name: String, args: Vec<String>) -> Result<Output> {
+    fn execute(&self, name: &str, args: Vec<String>) -> Result<Output> {
         let mut command = Command::new(&name);
         for arg in args {
             command.arg(&arg);
