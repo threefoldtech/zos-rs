@@ -198,7 +198,7 @@ impl App {
     }
 
     pub async fn poll_zos_addresses(&self) {
-        let network = api::NetworkerStub::from(self.client.clone());
+        let network = api::NetworkStub::from(self.client.clone());
         let mut recev: Receiver<NetlinkAddresses> = loop {
             match network.zos_addresses().await {
                 Ok(recev) => {
@@ -234,7 +234,7 @@ impl App {
         });
     }
     pub async fn poll_dmz_addresses(&self) {
-        let network = api::NetworkerStub::from(self.client.clone());
+        let network = api::NetworkStub::from(self.client.clone());
         let mut recev: Receiver<NetlinkAddresses> = loop {
             match network.dmz_addresses().await {
                 Ok(recev) => {
@@ -270,7 +270,7 @@ impl App {
         });
     }
     pub async fn poll_ygg_addresses(&self) {
-        let network = api::NetworkerStub::from(self.client.clone());
+        let network = api::NetworkStub::from(self.client.clone());
         let mut recev: Receiver<NetlinkAddresses> = loop {
             match network.ygg_addresses().await {
                 Ok(recev) => {
@@ -306,7 +306,7 @@ impl App {
         });
     }
     pub async fn poll_public_addresses(&self) {
-        let network = api::NetworkerStub::from(self.client.clone());
+        let network = api::NetworkStub::from(self.client.clone());
         let mut recev: Receiver<OptionPublicConfig> = loop {
             match network.public_addresses().await {
                 Ok(recev) => {
@@ -355,7 +355,7 @@ impl App {
         let identity_manager = api::IdentityManagerStub::from(self.client.clone());
         self.farm_id = identity_manager.farm_id().await;
         self.farm_name = identity_manager.farm().await;
-        let network = api::NetworkerStub::from(self.client.clone());
+        let network = api::NetworkStub::from(self.client.clone());
         self.exit_device = network.get_public_exit_device().await;
         self.cache_disk = flags::check(flags::Flags::LimitedCache);
         self.running_mode = env::RUNTIME.mode.to_string();
