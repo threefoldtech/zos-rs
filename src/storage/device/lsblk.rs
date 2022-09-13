@@ -99,7 +99,6 @@ where
     }
 
     async fn device<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::Device> {
-        let path = path.as_ref().as_os_str();
         let cmd = Command::new("lsblk")
             .arg("--json")
             .arg("-o")
@@ -107,7 +106,7 @@ where
             .arg("--bytes")
             .arg("--exclude")
             .arg("1,2,11")
-            .arg(path);
+            .arg(path.as_ref());
 
         let output = self.exec.run(&cmd).await?;
         let devices: Devices =
@@ -131,6 +130,16 @@ where
         }
 
         anyhow::bail!("device not found");
+    }
+
+    async fn shutdown(&self, device: &Self::Device) -> Result<()> {
+        let cmd = Command::new("hdparm").arg("-y").arg(device.path());
+
+        self.exec
+            .run(&cmd)
+            .await
+            .context("failed to shutdown device")?;
+        Ok(())
     }
 }
 
@@ -288,5 +297,46 @@ mod test {
         assert!(device.path() == path);
         assert!(matches!(device.filesystem(), Some(f) if f == "btrfs"));
         assert!(matches!(device.label(), Some(l) if l == "5ecdbb3c-b687-4048-b505-7a6756c2de76"));
+    }
+
+    #[tokio::test]
+    async fn lsblk_shutdown() {
+        let mut exec = crate::system::MockExecutor::default();
+        let cmd = Command::new("lsblk")
+            .arg("--json")
+            .arg("-o")
+            .arg("PATH,NAME,SIZE,SUBSYSTEMS,FSTYPE,LABEL,ROTA")
+            .arg("--bytes")
+            .arg("--exclude")
+            .arg("1,2,11");
+
+        exec.expect_run()
+            .withf(move |arg: &Command| arg == &cmd)
+            .times(1)
+            .returning(|_: &Command| Ok(Vec::from(LSBLK_LIST_VALID)));
+
+        //mut is only needed for the checkpoint
+        let mut lsblk = LsBlk::new(exec);
+
+        let device = lsblk
+            .labeled("5ecdbb3c-b687-4048-b505-7a6756c2de76")
+            .await
+            .expect("failed to get device");
+        lsblk.exec.checkpoint();
+
+        let path = Path::new("/dev/sdb");
+        assert!(device.path() == path);
+
+        let cmd = Command::new("hdparm").arg("-y").arg(device.path());
+
+        lsblk
+            .exec
+            .expect_run()
+            .withf(move |arg: &Command| arg == &cmd)
+            .times(1)
+            .returning(|_: &Command| Ok(Vec::default()));
+
+        lsblk.shutdown(&device).await.unwrap();
+        lsblk.exec.checkpoint();
     }
 }

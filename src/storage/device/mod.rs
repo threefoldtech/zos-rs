@@ -29,4 +29,6 @@ pub trait DeviceManager {
     async fn device<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::Device>;
 
     async fn labeled<S: AsRef<str> + Send>(&self, label: S) -> Result<Self::Device>;
+
+    async fn shutdown(&self, device: &Self::Device) -> Result<()>;
 }
