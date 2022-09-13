@@ -1,9 +1,18 @@
 use crate::Unit;
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub mod lsblk;
 pub use lsblk::{LsBlk, LsblkDevice};
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeviceType {
+    #[serde(alias = "hdd")]
+    HDD,
+    #[serde(alias = "ssd")]
+    SSD,
+}
 
 pub trait Device {
     fn path(&self) -> &Path;
@@ -31,4 +40,6 @@ pub trait DeviceManager {
     async fn labeled<S: AsRef<str> + Send>(&self, label: S) -> Result<Self::Device>;
 
     async fn shutdown(&self, device: &Self::Device) -> Result<()>;
+
+    async fn seektime(&self, device: &Self::Device) -> Result<DeviceType>;
 }
