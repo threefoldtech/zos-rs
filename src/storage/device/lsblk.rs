@@ -95,7 +95,11 @@ where
         let devices: Devices =
             serde_json::from_slice(&output).context("failed to decode lsblk output")?;
 
-        Ok(devices.devices)
+        Ok(devices
+            .devices
+            .into_iter()
+            .filter(|device| device.subsystems() != "block:scsi:usb:pci")
+            .collect())
     }
 
     async fn device<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::Device> {
@@ -154,7 +158,8 @@ mod test {
            {"path":"/dev/sda", "name":"/dev/sda", "size":512110190592, "subsystems":"block:scsi:pci", "fstype":"btrfs", "label":"aa8a31a4-cbe8-4615-a6fe-155a9418cd0a", "rota":false},
            {"path":"/dev/sdb", "name":"/dev/sdb", "size":3000592982016, "subsystems":"block:scsi:pci", "fstype":"btrfs", "label":"5ecdbb3c-b687-4048-b505-7a6756c2de76", "rota":true},
            {"path":"/dev/sdc", "name":"/dev/sdc", "size":3000592982016, "subsystems":"block:scsi:pci", "fstype":"btrfs", "label":"fb45d10b-ca67-44c2-9d3a-7c3468dcba5c", "rota":true},
-           {"path":"/dev/sdd", "name":"/dev/sdd", "size":3000592982016, "subsystems":"block:scsi:pci", "fstype": null, "label": null, "rota":false}
+           {"path":"/dev/sdd", "name":"/dev/sdd", "size":3000592982016, "subsystems":"block:scsi:pci", "fstype": null, "label": null, "rota":false},
+           {"path":"/dev/sdx", "name":"/dev/sdx", "size":12341245, "subsystems":"block:scsi:usb:pci", "fstype": null, "label": null, "rota":false}
         ]
      }"#;
 
