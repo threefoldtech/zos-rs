@@ -100,15 +100,7 @@ pub trait Flist {
     #[rename("HashFromRootPath")]
     async fn hash_of_mount(name: String) -> Result<String>;
 
-    /// return the hash of the flist at url
-    #[rename("FlistHash")]
-    async fn hash_of_flist(&self, url: &str) -> Result<String>;
-
     /// exists checks if a mount with that name exists
     #[rename("Exists")]
     async fn exists(name: String) -> Result<bool>;
-    #[rename("mountRO")]
-    async fn mount_ro(&self, url: &str, storage: &str) -> Result<String>;
-    #[rename("flist")]
-    async fn download_flist(&self, url: &str) -> Result<String>;
 }
