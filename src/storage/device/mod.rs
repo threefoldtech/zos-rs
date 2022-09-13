@@ -27,4 +27,6 @@ pub trait DeviceManager {
     async fn devices(&self) -> Result<Vec<Self::Device>>;
 
     async fn device<P: AsRef<Path> + Send>(&self, path: P) -> Result<Self::Device>;
+
+    async fn labeled<S: AsRef<str> + Send>(&self, label: S) -> Result<Self::Device>;
 }

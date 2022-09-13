@@ -48,6 +48,7 @@ pub struct Command {
 }
 
 impl Command {
+    /// create a new command with given name
     pub fn new<S: Into<OsString>>(cmd: S) -> Command {
         Command {
             cmd: cmd.into(),
@@ -55,6 +56,7 @@ impl Command {
         }
     }
 
+    /// append an argument to a command
     pub fn arg<S: Into<OsString>>(mut self, arg: S) -> Self {
         self.args.push(arg.into());
         self
