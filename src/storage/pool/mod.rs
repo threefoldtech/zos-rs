@@ -5,14 +5,18 @@ use std::path::Path;
 use thiserror::Error;
 // define error type?
 
+pub mod btrfs;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("volume not found {volume}")]
     VolumeNotFound { volume: String },
     #[error("pool not found {pool}")]
     PoolNotFound { pool: String },
-    //todo: add more errors based on progress
+    #[error("operation not support")]
+    Unsupported,
 
+    //todo: add more errors based on progress
     // cover it all error
     #[error("{0}")]
     Other(#[from] anyhow::Error),
@@ -43,7 +47,7 @@ pub trait Pool: Volume {
 
     async fn volumes(&self) -> Result<Vec<Self::Volume>>;
 
-    async fn volume<S: AsRef<str>>(&self, name: S) -> Result<Self::Volume>;
+    async fn volume<S: AsRef<str> + Send>(&self, name: S) -> Result<Self::Volume>;
 
-    async fn delete<S: AsRef<str>>(&self, name: S) -> Result<()>;
+    async fn delete<S: AsRef<str> + Send>(&self, name: S) -> Result<()>;
 }
