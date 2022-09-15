@@ -46,6 +46,7 @@ pub async fn mountpoint<P: AsRef<Path>>(target: P) -> Result<Option<Mount>> {
 
 /// mount info returns mount information of source mount. if source (say a disk or disk parition) is mounted
 /// multiple times Vec will have more than one element.
+/// note that source is not a "path" because source can be other things
 pub async fn mountinfo<P: AsRef<str>>(source: P) -> Result<Vec<Mount>> {
     let mounts = parser().await?;
     let source = source.as_ref();
