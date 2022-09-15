@@ -165,33 +165,35 @@ impl<E: Executor> BtrfsUtils<E> {
         Self { exec }
     }
 
-    async fn volume_create<P: AsRef<Path>, S: AsRef<str>>(&self, root: P, name: S) -> Result<()> {
+    async fn volume_create<P: AsRef<Path>, S: AsRef<str>>(
+        &self,
+        root: P,
+        name: S,
+    ) -> Result<PathBuf> {
+        let path = root.as_ref().join(name.as_ref());
         let cmd = Command::new("btrfs")
             .arg("subvolume")
             .arg("create")
-            .arg(name.as_ref())
-            .arg(root.as_ref());
+            .arg(path);
 
         self.exec.run(&cmd).await?;
-        Ok(())
+        Ok(root.as_ref().join(name.as_ref()))
     }
 
     async fn volume_delete<P: AsRef<Path>, S: AsRef<str>>(&self, root: P, name: S) -> Result<()> {
+        let path = root.as_ref().join(name.as_ref());
         let cmd = Command::new("btrfs")
             .arg("subvolume")
             .arg("delete")
-            .arg(name.as_ref())
-            .arg(root.as_ref());
+            .arg(path);
 
         self.exec.run(&cmd).await?;
         Ok(())
     }
 
-    async fn volume_id<P: AsRef<Path>>(&self, volume: P) -> Result<u64> {
-        let cmd = Command::new("btrfs")
-            .arg("subvolume")
-            .arg("show")
-            .arg(volume.as_ref());
+    async fn volume_id<P: AsRef<Path>, S: AsRef<str>>(&self, root: P, name: S) -> Result<u64> {
+        let path = root.as_ref().join(name.as_ref());
+        let cmd = Command::new("btrfs").arg("subvolume").arg("show").arg(path);
 
         let output = self.exec.run(&cmd).await?;
         Ok(self.parse_volume_info(&output)?)
@@ -243,7 +245,7 @@ impl<E: Executor> BtrfsUtils<E> {
         Ok(())
     }
 
-    async fn groupl_list<P: AsRef<Path>>(&self, root: P) -> Result<Vec<QGroupInfo>> {
+    async fn qgroup_list<P: AsRef<Path>>(&self, root: P) -> Result<Vec<QGroupInfo>> {
         // qgroup show -re --raw .
         let cmd = Command::new("btrfs")
             .arg("qgroup")
@@ -340,7 +342,11 @@ impl Default for BtrfsUtils<crate::system::System> {
 
 #[cfg(test)]
 mod test {
+    use crossterm::style::Stylize;
+
     use super::BtrfsUtils;
+    use crate::system::Command;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn utils_vol_info_parse() {
@@ -424,5 +430,203 @@ ID 7438 gen 33152049 top level 5 path rootfs:647-10988-vm
 
         assert_eq!(vol1.id, 262);
         assert_eq!(vol1.name, "vdisks");
+    }
+
+    #[tokio::test]
+    async fn utils_volume_create() {
+        let exec = crate::system::MockExecutor::default();
+        let mut utils = BtrfsUtils::new(exec);
+        let cmd = Command::new("btrfs")
+            .arg("subvolume")
+            .arg("create")
+            .arg("/mnt/pool/test");
+        utils
+            .exec
+            .expect_run()
+            .withf(move |arg: &Command| arg == &cmd)
+            .returning(|_| Ok(Vec::default()));
+
+        let vol = utils.volume_create("/mnt/pool", "test").await.unwrap();
+        utils.exec.checkpoint();
+        assert_eq!(vol, Path::new("/mnt/pool/test"))
+    }
+
+    #[tokio::test]
+    async fn utils_volume_delete() {
+        let exec = crate::system::MockExecutor::default();
+        let mut utils = BtrfsUtils::new(exec);
+        let cmd = Command::new("btrfs")
+            .arg("subvolume")
+            .arg("delete")
+            .arg("/mnt/pool/test");
+        utils
+            .exec
+            .expect_run()
+            .withf(move |arg: &Command| arg == &cmd)
+            .returning(|_| Ok(Vec::default()));
+
+        let vol = utils.volume_delete("/mnt/pool", "test").await.unwrap();
+        utils.exec.checkpoint();
+    }
+
+    #[tokio::test]
+    async fn utils_volume_id() {
+        const DATA: &str = r#"b623b3b159fa02652bb21c695a157b4d
+        Name: 			b623b3b159fa02652bb21c695a157b4d
+        UUID: 			abf4240e-6402-9947-963e-63db1a7f5582
+        Parent UUID: 		-
+        Received UUID: 		-
+        Creation time: 		2022-02-03 12:58:32 +0000
+        Subvolume ID: 		1740
+        Generation: 		33008608
+        Gen at creation: 	199304
+        Parent ID: 		5
+        Top level ID: 		5
+        Flags: 			-
+        Snapshot(s):
+        "#;
+
+        let exec = crate::system::MockExecutor::default();
+        let mut utils = BtrfsUtils::new(exec);
+        let cmd = Command::new("btrfs")
+            .arg("subvolume")
+            .arg("show")
+            .arg("/mnt/pool/test");
+        utils
+            .exec
+            .expect_run()
+            .withf(move |arg: &Command| arg == &cmd)
+            .returning(|_| Ok(Vec::from(DATA)));
+
+        let vol = utils.volume_id("/mnt/pool", "test").await.unwrap();
+        utils.exec.checkpoint();
+        assert_eq!(vol, 1740);
+    }
+
+    #[tokio::test]
+    async fn utils_volume_list() {
+        const DATA: &str = r#"ID 256 gen 33152047 top level 5 path zos-cache
+ID 262 gen 33152049 top level 5 path vdisks
+ID 1596 gen 117776 top level 5 path bfb95cf4f1b6245f56a7fb7a86bd1e0d
+ID 1737 gen 156823 top level 5 path 794e0004fd49a7300d612dcbba10279f
+ID 1740 gen 33008608 top level 5 path b623b3b159fa02652bb21c695a157b4d
+ID 4301 gen 5392957 top level 5 path rootfs:433-3764-mr
+ID 4303 gen 32919873 top level 5 path rootfs:433-3764-w1
+ID 4849 gen 33152049 top level 5 path rootfs:288-5475-owncloud_samehabouelsaad
+ID 7437 gen 33152049 top level 5 path 647-10988-qsfs
+ID 7438 gen 33152049 top level 5 path rootfs:647-10988-vm
+        "#;
+
+        let exec = crate::system::MockExecutor::default();
+        let mut utils = BtrfsUtils::new(exec);
+        let cmd = Command::new("btrfs")
+            .arg("subvolume")
+            .arg("list")
+            .arg("-o")
+            .arg("/mnt/pool");
+        utils
+            .exec
+            .expect_run()
+            .withf(move |arg: &Command| arg == &cmd)
+            .returning(|_| Ok(Vec::from(DATA)));
+
+        let vols = utils.volume_list("/mnt/pool").await.unwrap();
+        utils.exec.checkpoint();
+        assert_eq!(vols.len(), 10);
+        let vol0 = &vols[0];
+        let vol1 = &vols[1];
+
+        assert_eq!(vol0.id, 256);
+        assert_eq!(vol0.name, "zos-cache");
+
+        assert_eq!(vol1.id, 262);
+        assert_eq!(vol1.name, "vdisks");
+    }
+
+    #[tokio::test]
+    async fn utils_qgroup_enable() {
+        let exec = crate::system::MockExecutor::default();
+        let mut utils = BtrfsUtils::new(exec);
+        let cmd = Command::new("btrfs")
+            .arg("quota")
+            .arg("enable")
+            .arg("/mnt/pool");
+        utils
+            .exec
+            .expect_run()
+            .withf(move |arg: &Command| arg == &cmd)
+            .returning(|_| Ok(Vec::default()));
+
+        utils.qgroup_enable("/mnt/pool").await.unwrap();
+        utils.exec.checkpoint();
+    }
+
+    #[tokio::test]
+    async fn utils_qgroup_destroy() {
+        let exec = crate::system::MockExecutor::default();
+        let mut utils = BtrfsUtils::new(exec);
+        let cmd = Command::new("btrfs")
+            .arg("qgroup")
+            .arg("destroy")
+            .arg(format!("0/{}", 250))
+            .arg("/mnt/pool");
+        utils
+            .exec
+            .expect_run()
+            .withf(move |arg: &Command| arg == &cmd)
+            .returning(|_| Ok(Vec::default()));
+
+        utils.qgroup_delete("/mnt/pool", 250).await.unwrap();
+        utils.exec.checkpoint();
+    }
+
+    #[tokio::test]
+    async fn utils_qgroup_list() {
+        const DATA: &str = r#"qgroupid         rfer         excl     max_rfer     max_excl
+--------         ----         ----     --------     --------
+0/256      1732771840   1732771840 107374182400         none
+0/262     60463501312  60463501312         none         none
+0/1596          16384        16384     10485760         none
+0/1737          16384        16384     10485760         none
+0/1740          16384        16384     10485760         none
+0/4301      524271616    524271616    524288000         none
+0/4303      524271616    524271616    524288000         none
+0/4849      106655744    106655744   2147483648         none
+0/7437        6471680      6471680  10737418240         none
+0/7438     1525182464   1525182464   2147483648         none
+        "#;
+
+        let exec = crate::system::MockExecutor::default();
+        let mut utils = BtrfsUtils::new(exec);
+        let cmd = Command::new("btrfs")
+            .arg("qgroup")
+            .arg("show")
+            .arg("-re")
+            .arg("--raw")
+            .arg("/mnt/pool");
+        utils
+            .exec
+            .expect_run()
+            .withf(move |arg: &Command| arg == &cmd)
+            .returning(|_| Ok(Vec::from(DATA)));
+
+        let groups = utils.qgroup_list("/mnt/pool").await.unwrap();
+        utils.exec.checkpoint();
+
+        assert_eq!(groups.len(), 10);
+        let group0 = &groups[0];
+        let group1 = &groups[1];
+
+        assert_eq!(group0.id, "0/256");
+        assert_eq!(group0.rfer, 1732771840);
+        assert_eq!(group0.excl, 1732771840);
+        assert_eq!(group0.max_rfer, Some(107374182400));
+        assert_eq!(group0.max_excl, None);
+
+        assert_eq!(group1.id, "0/262");
+        assert_eq!(group1.rfer, 60463501312);
+        assert_eq!(group1.excl, 60463501312);
+        assert_eq!(group1.max_rfer, None);
+        assert_eq!(group1.max_excl, None);
     }
 }
