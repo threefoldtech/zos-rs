@@ -1,4 +1,4 @@
-use super::{Error, Pool, Result, Volume};
+use super::{DownPool, Error, Pool, Result, UpPool, Volume};
 use crate::storage::device::Device;
 use crate::system::{Command, Executor};
 use crate::Unit;
@@ -38,7 +38,67 @@ impl Volume for BtrfsVolume {
     }
 }
 
-pub struct BtrfsPool<D>
+pub type BtrfsPool<D> = Pool<BtrfsUpPool<D>, BtrfsDownPool<D>>;
+
+impl<D> BtrfsPool<D>
+where
+    D: Device + Send + Sync,
+{
+    /// create a new btrfs pool from device. the device must have a valid
+    /// btrfs filesystem.
+    pub async fn new(device: D) -> Result<Self> {
+        let path = device.path().to_str().ok_or_else(|| Error::InvalidDevice {
+            device: device.path().into(),
+        })?;
+
+        if device.filesystem().is_none() || device.label().is_none() {
+            return Err(Error::InvalidFilesystem {
+                device: device.path().into(),
+            });
+        }
+
+        let mnt = crate::storage::mountinfo(path)
+            .await?
+            .into_iter()
+            .filter(|m| matches!(m.option("subvol"), Some(Some(v)) if v == "/"))
+            .next();
+
+        match mnt {
+            Some(mnt) => {
+                let up = BtrfsUpPool {
+                    device: device,
+                    path: mnt.target,
+                };
+                Ok(BtrfsPool::Up(up))
+            }
+            None => {
+                let down = BtrfsDownPool { device };
+                Ok(BtrfsPool::Down(down))
+            }
+        }
+    }
+}
+
+pub struct BtrfsDownPool<D>
+where
+    D: Device,
+{
+    device: D,
+}
+
+#[async_trait::async_trait]
+impl<D> DownPool for BtrfsDownPool<D>
+where
+    D: Device + Send + Sync,
+{
+    type UpPool = BtrfsUpPool<D>;
+
+    async fn up(mut self) -> Result<Self::UpPool> {
+        unimplemented!();
+    }
+}
+
+pub struct BtrfsUpPool<D>
 where
     D: Device,
 {
@@ -47,60 +107,26 @@ where
 }
 
 #[async_trait::async_trait]
-impl<D> Volume for BtrfsPool<D>
+impl<D> UpPool for BtrfsUpPool<D>
 where
     D: Device + Send + Sync,
 {
-    fn id(&self) -> u64 {
-        0
-    }
+    type Volume = BtrfsVolume;
+    type DownPool = BtrfsDownPool<D>;
 
     fn path(&self) -> &Path {
-        &self.path
+        unimplemented!()
     }
 
     fn name(&self) -> &str {
-        self.device.label().unwrap_or("unknown")
-    }
-
-    async fn limit(&self, size: Unit) -> Result<()> {
-        Err(Error::Unsupported)
+        unimplemented!()
     }
 
     async fn usage(&self) -> Result<Unit> {
         unimplemented!()
     }
-}
 
-#[async_trait::async_trait]
-impl<D> Pool for BtrfsPool<D>
-where
-    D: Device + Send + Sync,
-{
-    type Volume = BtrfsVolume;
-
-    async fn mount(&self) -> Result<PathBuf> {
-        let device = self.device.path().to_str().ok_or(Error::InvalidDevice {
-            device: self.device.path().into(),
-        })?;
-
-        let mnt = crate::storage::mountinfo(&device)
-            .await?
-            .into_iter()
-            .filter(|m| matches!(m.option("subvol"), Some(Some(target)) if target == "/"))
-            .next();
-
-        if let Some(mnt) = mnt {
-            return Ok(mnt.target);
-        }
-
-        //self.device.label()
-        //let path = PathBuf::from(MNT).join(self.device.label());
-
-        unimplemented!()
-    }
-
-    async fn unmount(&self) -> Result<()> {
+    async fn down(mut self) -> Result<Self::DownPool> {
         unimplemented!()
     }
 

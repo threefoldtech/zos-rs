@@ -15,7 +15,8 @@ pub enum Error {
     PoolNotFound { pool: String },
     #[error("invalid device {device}")]
     InvalidDevice { device: PathBuf },
-
+    #[error("invalid filesystem on device {device}")]
+    InvalidFilesystem { device: PathBuf },
     #[error("operation not support")]
     Unsupported,
 
@@ -43,16 +44,37 @@ pub trait Volume {
 }
 
 #[async_trait::async_trait]
-pub trait Pool: Volume {
+pub trait UpPool {
+    type DownPool: DownPool;
     type Volume: Volume;
 
-    async fn mount(&self) -> Result<PathBuf>;
+    fn path(&self) -> &Path;
 
-    async fn unmount(&self) -> Result<()>;
+    fn name(&self) -> &str;
+
+    async fn usage(&self) -> Result<Unit>;
+
+    async fn down(self) -> Result<Self::DownPool>;
 
     async fn volumes(&self) -> Result<Vec<Self::Volume>>;
 
     async fn volume<S: AsRef<str> + Send>(&self, name: S) -> Result<Self::Volume>;
 
     async fn delete<S: AsRef<str> + Send>(&self, name: S) -> Result<()>;
+}
+
+#[async_trait::async_trait]
+pub trait DownPool {
+    type UpPool: UpPool;
+
+    async fn up(self) -> Result<Self::UpPool>;
+}
+
+pub enum Pool<U, D>
+where
+    U: UpPool,
+    D: DownPool,
+{
+    Up(U),
+    Down(D),
 }
