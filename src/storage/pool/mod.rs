@@ -1,7 +1,7 @@
 use crate::Unit;
 /// a pool is a wrapper around a disk device. right now a single pool
 /// uses a single disk device.
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 // define error type?
 
@@ -13,9 +13,14 @@ pub enum Error {
     VolumeNotFound { volume: String },
     #[error("pool not found {pool}")]
     PoolNotFound { pool: String },
+    #[error("invalid device {device}")]
+    InvalidDevice { device: PathBuf },
+
     #[error("operation not support")]
     Unsupported,
 
+    #[error("external operation failed with error: {0}")]
+    ExternalOperation(#[from] crate::system::Error),
     //todo: add more errors based on progress
     // cover it all error
     #[error("{0}")]
@@ -41,7 +46,7 @@ pub trait Volume {
 pub trait Pool: Volume {
     type Volume: Volume;
 
-    async fn mount(&self) -> Result<&Path>;
+    async fn mount(&self) -> Result<PathBuf>;
 
     async fn unmount(&self) -> Result<()>;
 
