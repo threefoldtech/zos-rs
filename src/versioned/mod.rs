@@ -1,114 +1,84 @@
-use std::{fs, io::Error, fmt::{self, Display, Debug}, string, result::Result::Ok, io::Write};
-use semver::{BuildMetadata, Prerelease, Version, VersionReq};
+use semver::Version;
 use std::str;
-use tokio::io;
-
+use std::{
+    error::Error,
+    fmt::{self, Debug},
+    fs,
+    io::Write,
+    os::unix::prelude::{OpenOptionsExt, PermissionsExt},
+    result::Result::Ok,
+};
 
 #[derive(Debug, Clone)]
-struct NotVersionedError{
-    msg: String
-}
+struct NotVersionedError;
 
 #[derive(Debug)]
-struct VersionedFile{
+struct VersionedFile {
     pub version: Version,
-    pub data: Vec<u8>
+    pub data: Vec<u8>,
 }
 
-impl NotVersionedError{
-    fn new(msg: &str) -> NotVersionedError{
-        return NotVersionedError{msg: msg.to_string()}
-    }
-}
-
-impl fmt::Display for NotVersionedError{
+impl fmt::Display for NotVersionedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "versioned file error: {}", self.msg)
+        write!(f, "no version information")
     }
 }
 
+impl Error for NotVersionedError {}
 
-
-impl VersionedFile{
-    
-    fn read_file(path: &str) -> Result<VersionedFile, NotVersionedError> {
-        
-        let file = match fs::read(path){
-            Ok(file) => file,
-            Err(err) => return Err(NotVersionedError::new(err.to_string().as_str()))
+impl VersionedFile {
+    fn new_writer(
+        file: &mut std::fs::File,
+        version: Version,
+    ) -> Result<Box<dyn Write + '_>, Box<dyn Error>> {
+        match file.write_all(format!("\"{}\"", version).as_bytes()) {
+            Ok(()) => (),
+            Err(err) => return Err(Box::new(err)),
         };
-        let mut double_qoutes = 0;
-        let mut version_end = 0;
-        for (ind, c) in file.iter().enumerate(){
-            if *c == b'\"'{
-                double_qoutes += 1;
-                if double_qoutes == 2{
-                    version_end = ind;
-                    break;
-                }
-            }
-        }
-        if double_qoutes < 2{
-            return Err(NotVersionedError::new("no version information"))
-        }
-        let (version_bytes, data_bytes) = file.split_at(version_end+1);
-        let version_str = match str::from_utf8(&version_bytes[1..version_end]){
-            Ok(version) => version,
-            Err(err) => return Err(NotVersionedError::new(err.to_string().as_str()))
-        };
-
-        let version = match Version::parse(version_str){
-            Ok(version) => version,
-            Err(err) => return Err(NotVersionedError::new(err.to_string().as_str()))
-        };
-        let ret : VersionedFile = VersionedFile { version, data: Vec::from(data_bytes) };
-        Ok(ret)
+        return Ok(Box::new(file));
     }
 
-    fn write_file(path: &str, version: Version, data: &[u8]) -> Result<(), NotVersionedError>{
-        let mut file = match fs::OpenOptions::new().write(true).create(true).open(path){
+    fn write_file(
+        path: &str,
+        version: Version,
+        data: &[u8],
+        perm: fs::Permissions,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut file = match fs::OpenOptions::new()
+            .mode(perm.mode())
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)
+        {
             Ok(file) => file,
-            Err(err) => return Err(NotVersionedError::new(err.to_string().as_str()))
+            Err(err) => return Err(Box::new(err)),
         };
-        let f = [format!("\"{}\"", version).as_bytes(), data].concat();
-        match file.write(&f[..]){
-            Ok(res) => res,
-            Err(err) => return Err(NotVersionedError::new(err.to_string().as_str()))
+        let mut v_writer = match VersionedFile::new_writer(&mut file, version) {
+            Ok(writer) => writer,
+            Err(err) => return Err(err),
         };
-        return Ok(())
+        match v_writer.write_all(data) {
+            Ok(()) => (),
+            Err(err) => return Err(Box::new(err)),
+        }
+        Ok(())
     }
 }
 
 #[cfg(test)]
 
-mod test{
-    use std::io::Write;
-    use semver::{Version, Prerelease};
+mod test {
     use super::VersionedFile;
+    use semver::Version;
+    use std::{fs::Permissions, os::unix::prelude::PermissionsExt};
 
     #[test]
-    fn test_read_file(){
-        let mut file = std::fs::OpenOptions::new().read(true).write(true).create(true).open("/tmp/test_read").unwrap();
-        let data = b"hello read";
-        let mut version = Version::new(1, 5, 7);
-        version.pre = Prerelease::new("beta").unwrap();
-        let f = [format!("\"{}\"", version).as_bytes(), data].concat();
-        file.write(&f[..]).expect("couldn't write to file");
-        let versioned = VersionedFile::read_file("/tmp/test_read");
-        assert!(versioned.is_ok());
-        let ret_file = versioned.unwrap();
-        assert_eq!(ret_file.version, version);
-        assert_eq!(ret_file.data, data);
-    }
-
-    #[test]
-    fn test_write_file(){
+    fn test_write_file() {
         let data = b"hello write";
-        let mut version = Version::new(1, 5, 7);
-        version.pre = Prerelease::new("alpha").unwrap();
-        let res = VersionedFile::write_file("/tmp/test_write", version, data);
-        assert!(res.is_ok())
-        
+        let version = Version::new(1, 5, 7);
+        let perm = Permissions::from_mode(777);
+        let res = VersionedFile::write_file("/tmp/test_write", version, data, perm);
+        assert!(res.is_ok());
     }
 }
-
