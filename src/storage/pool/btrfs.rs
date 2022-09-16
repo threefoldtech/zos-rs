@@ -1,19 +1,33 @@
 use super::{DownPool, Error, Pool, Result, UpPool, Volume};
 use crate::storage::device::Device;
-use crate::system::{Command, Executor};
+use crate::system::{Command, Executor, Syscalls};
 use crate::Unit;
-use anyhow::Context;
 use std::path::{Path, PathBuf};
-
 /// root mount path
 const MNT: &str = "/mnt";
 
-pub struct BtrfsVolume {
+pub struct BtrfsVolume<E>
+where
+    E: Executor,
+{
+    utils: BtrfsUtils<E>,
     path: PathBuf,
 }
 
+impl<E> BtrfsVolume<E>
+where
+    E: Executor,
+{
+    fn new(exec: BtrfsUtils<E>, path: PathBuf) -> Self {
+        Self { utils: exec, path }
+    }
+}
+
 #[async_trait::async_trait]
-impl Volume for BtrfsVolume {
+impl<E> Volume for BtrfsVolume<E>
+where
+    E: Executor + Send + Sync,
+{
     fn id(&self) -> u64 {
         unimplemented!()
     }
@@ -38,15 +52,17 @@ impl Volume for BtrfsVolume {
     }
 }
 
-pub type BtrfsPool<D> = Pool<BtrfsUpPool<D>, BtrfsDownPool<D>>;
+pub type BtrfsPool<E, S, D> = Pool<BtrfsUpPool<E, S, D>, BtrfsDownPool<E, S, D>>;
 
-impl<D> BtrfsPool<D>
+impl<E, S, D> BtrfsPool<E, S, D>
 where
+    E: Executor + Send + Sync + 'static,
+    S: Syscalls + Send + Sync,
     D: Device + Send + Sync,
 {
     /// create a new btrfs pool from device. the device must have a valid
     /// btrfs filesystem.
-    pub async fn new(device: D) -> Result<Self> {
+    pub async fn new(exec: E, sys: S, device: D) -> Result<Self> {
         let path = device.path().to_str().ok_or_else(|| Error::InvalidDevice {
             device: device.path().into(),
         })?;
@@ -63,63 +79,111 @@ where
             .filter(|m| matches!(m.option("subvol"), Some(Some(v)) if v == "/"))
             .next();
 
+        let utils = BtrfsUtils::new(exec);
         match mnt {
-            Some(mnt) => {
-                let up = BtrfsUpPool {
-                    device: device,
-                    path: mnt.target,
-                };
-                Ok(BtrfsPool::Up(up))
-            }
-            None => {
-                let down = BtrfsDownPool { device };
-                Ok(BtrfsPool::Down(down))
-            }
+            Some(mnt) => Ok(BtrfsPool::Up(BtrfsUpPool::new(
+                utils, sys, mnt.target, device,
+            ))),
+            None => Ok(BtrfsPool::Down(BtrfsDownPool::new(utils, sys, device))),
         }
     }
 }
 
-pub struct BtrfsDownPool<D>
+pub struct BtrfsDownPool<E, S, D>
 where
+    E: Executor + 'static,
+    S: Syscalls,
     D: Device,
 {
+    sys: S,
+    utils: BtrfsUtils<E>,
     device: D,
 }
 
-#[async_trait::async_trait]
-impl<D> DownPool for BtrfsDownPool<D>
+impl<E, S, D> BtrfsDownPool<E, S, D>
 where
+    E: Executor + Send + Sync,
+    S: Syscalls + Send + Sync,
     D: Device + Send + Sync,
 {
-    type UpPool = BtrfsUpPool<D>;
-
-    async fn up(mut self) -> Result<Self::UpPool> {
-        unimplemented!();
+    fn new(utils: BtrfsUtils<E>, sys: S, device: D) -> Self {
+        Self { utils, sys, device }
     }
 }
 
-pub struct BtrfsUpPool<D>
+#[async_trait::async_trait]
+impl<E, S, D> DownPool for BtrfsDownPool<E, S, D>
 where
+    E: Executor + Send + Sync + 'static,
+    S: Syscalls + Send + Sync,
+    D: Device + Send + Sync,
+{
+    type UpPool = BtrfsUpPool<E, S, D>;
+
+    async fn up(mut self) -> Result<Self::UpPool> {
+        // mount the device and return the proper UpPool
+        let path =
+            Path::new(MNT).join(self.device.label().ok_or_else(|| Error::InvalidDevice {
+                device: self.device.path().into(),
+            })?);
+
+        self.sys.mount(
+            self.device.path().to_str(),
+            &path,
+            Option::<&str>::None,
+            nix::mount::MsFlags::empty(),
+            Option::<&str>::None,
+        )?;
+
+        Ok(BtrfsUpPool::new(self.utils, self.sys, path, self.device))
+    }
+}
+
+pub struct BtrfsUpPool<E, S, D>
+where
+    E: Executor + 'static,
+    S: Syscalls,
     D: Device,
 {
+    utils: BtrfsUtils<E>,
+    sys: S,
     device: D,
     path: PathBuf,
 }
 
-#[async_trait::async_trait]
-impl<D> UpPool for BtrfsUpPool<D>
+impl<E, S, D> BtrfsUpPool<E, S, D>
 where
+    E: Executor + Send + Sync,
+    S: Syscalls + Send + Sync,
     D: Device + Send + Sync,
 {
-    type Volume = BtrfsVolume;
-    type DownPool = BtrfsDownPool<D>;
+    fn new(utils: BtrfsUtils<E>, sys: S, path: PathBuf, device: D) -> Self {
+        Self {
+            utils,
+            sys,
+            device,
+            path,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl<E, S, D> UpPool for BtrfsUpPool<E, S, D>
+where
+    E: Executor + Send + Sync + 'static,
+    S: Syscalls + Send + Sync,
+    D: Device + Send + Sync,
+{
+    type Volume = BtrfsVolume<E>;
+    type DownPool = BtrfsDownPool<E, S, D>;
 
     fn path(&self) -> &Path {
-        unimplemented!()
+        &self.path
     }
 
     fn name(&self) -> &str {
-        unimplemented!()
+        // if we are at this state so device MUST have a label so it's safe to do this
+        &self.device.label().unwrap()
     }
 
     async fn usage(&self) -> Result<Unit> {
@@ -127,18 +191,28 @@ where
     }
 
     async fn down(mut self) -> Result<Self::DownPool> {
-        unimplemented!()
+        self.sys.umount(&self.path, None)?;
+        Ok(BtrfsDownPool::new(self.utils, self.sys, self.device))
     }
 
     async fn volumes(&self) -> Result<Vec<Self::Volume>> {
+        // Ok(self
+        //     .utils
+        //     .volume_list(&self.path)
+        //     .await?
+        //     .into_iter()
+        //     .map(|m| BtrfsVolume::new(self.utils.clone(), Path::new(&self.path).join(m.name)))
+        //     .collect())
         unimplemented!()
     }
 
-    async fn volume<S: AsRef<str> + Send>(&self, name: S) -> Result<Self::Volume> {
+    async fn volume<N: AsRef<str> + Send>(&self, name: N) -> Result<Self::Volume> {
+        self.utils.volume_id(&self.path, name).await?;
+        //Ok(BtrfsVolume{path: Path})
         unimplemented!()
     }
 
-    async fn delete<S: AsRef<str> + Send>(&self, name: S) -> Result<()> {
+    async fn delete<N: AsRef<str> + Send>(&self, name: N) -> Result<()> {
         unimplemented!()
     }
 }
@@ -160,7 +234,7 @@ struct BtrfsUtils<E: Executor> {
     exec: E,
 }
 
-impl<E: Executor> BtrfsUtils<E> {
+impl<E: Executor + 'static> BtrfsUtils<E> {
     fn new(exec: E) -> Self {
         Self { exec }
     }
@@ -334,19 +408,16 @@ impl<E: Executor> BtrfsUtils<E> {
 
 impl Default for BtrfsUtils<crate::system::System> {
     fn default() -> Self {
-        BtrfsUtils {
-            exec: crate::system::System,
-        }
+        BtrfsUtils::new(crate::system::System)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crossterm::style::Stylize;
 
     use super::BtrfsUtils;
     use crate::system::Command;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     #[test]
     fn utils_vol_info_parse() {
@@ -465,7 +536,7 @@ ID 7438 gen 33152049 top level 5 path rootfs:647-10988-vm
             .withf(move |arg: &Command| arg == &cmd)
             .returning(|_| Ok(Vec::default()));
 
-        let vol = utils.volume_delete("/mnt/pool", "test").await.unwrap();
+        utils.volume_delete("/mnt/pool", "test").await.unwrap();
         utils.exec.checkpoint();
     }
 

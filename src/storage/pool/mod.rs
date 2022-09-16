@@ -21,7 +21,7 @@ pub enum Error {
     Unsupported,
 
     #[error("external operation failed with error: {0}")]
-    ExternalOperation(#[from] crate::system::Error),
+    SystemError(#[from] crate::system::Error),
     //todo: add more errors based on progress
     // cover it all error
     #[error("{0}")]
