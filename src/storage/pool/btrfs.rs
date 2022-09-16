@@ -2,9 +2,33 @@ use super::{DownPool, Error, Pool, Result, UpPool, Usage, Volume};
 use crate::storage::device::Device;
 use crate::system::{Command, Executor, Syscalls};
 use crate::Unit;
+use anyhow::Context;
 use std::path::{Path, PathBuf};
 /// root mount path
 const MNT: &str = "/mnt";
+
+/// dir size will calculate the total size of a directory including sub directories
+pub async fn dir_size<P: Into<PathBuf>>(root: P) -> std::result::Result<Unit, std::io::Error> {
+    use tokio::fs::read_dir;
+    let mut paths: Vec<PathBuf> = vec![root.into()];
+    let mut index = 0;
+    let mut size: Unit = 0;
+    while index < paths.len() {
+        let path = &paths[index];
+        let mut entries = read_dir(path).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let meta = entry.metadata().await?;
+            let typ = meta.file_type();
+            if typ.is_dir() {
+                paths.push(entry.path());
+            } else if typ.is_file() {
+                size += meta.len();
+            }
+        }
+        index += 1;
+    }
+    Ok(size)
+}
 
 pub struct BtrfsVolume<'a, E>
 where
@@ -63,7 +87,9 @@ where
 
         let used = match qgroup.max_rfer {
             Some(used) => used,
-            None => unimplemented!(), //TODO: scan all files sizes
+            None => dir_size(&self.path)
+                .await
+                .context("failed to calculate volume size")?, //TODO: scan all files sizes
         };
 
         Ok(Usage {
@@ -73,7 +99,10 @@ where
     }
 }
 
+/// shorthand for a btrfs pool
 pub type BtrfsPool<E, S, D> = Pool<BtrfsUpPool<E, S, D>, BtrfsDownPool<E, S, D>>;
+/// default btrfs pool implementation
+pub type DefaultBtrfsPool<D> = BtrfsPool<crate::system::System, crate::system::System, D>;
 
 impl<E, S, D> BtrfsPool<E, S, D>
 where
@@ -209,7 +238,22 @@ where
     }
 
     async fn usage(&self) -> Result<Usage> {
-        unimplemented!()
+        let mut used: Unit = 0;
+        // this is a very bad implementation because each call to
+        // volume.usage() will list all qgroups first then find the
+        // corresponding volume id.
+        // instead this can be improved by listing once both the
+        // volumes and the groups, then just match and calculate once.
+        // todo!
+        for volume in self.volumes().await? {
+            let usage = volume.usage().await?;
+            used += usage.used;
+        }
+
+        Ok(Usage {
+            size: self.device.size(),
+            used: used,
+        })
     }
 
     async fn down(mut self) -> Result<Self::DownPool> {

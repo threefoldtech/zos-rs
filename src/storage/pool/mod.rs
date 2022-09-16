@@ -6,6 +6,7 @@ use thiserror::Error;
 // define error type?
 
 pub mod btrfs;
+pub use btrfs::DefaultBtrfsPool;
 
 #[derive(Error, Debug)]
 pub enum Error {
