@@ -487,9 +487,127 @@ impl Default for BtrfsUtils<crate::system::System> {
 #[cfg(test)]
 mod test {
 
-    use super::BtrfsUtils;
-    use crate::system::Command;
-    use std::path::Path;
+    use super::{BtrfsPool, BtrfsUtils, DownPool, Pool, UpPool, Volume};
+    use crate::storage::device::Device;
+    use crate::system::{Command, Syscalls};
+    use crate::Unit;
+    use std::path::{Path, PathBuf};
+
+    // mock syscall always succeed
+    // should be improved to validate the inputs
+    struct MockSyscalls;
+    impl Syscalls for MockSyscalls {
+        fn mount<S: AsRef<str>, T: AsRef<Path>, F: AsRef<str>, D: AsRef<str>>(
+            &self,
+            source: Option<S>,
+            target: T,
+            fstype: Option<F>,
+            flags: nix::mount::MsFlags,
+            data: Option<D>,
+        ) -> Result<(), crate::system::Error> {
+            Ok(())
+        }
+
+        fn umount<T: AsRef<Path>>(
+            &self,
+            target: T,
+            flags: Option<nix::mount::MntFlags>,
+        ) -> Result<(), crate::system::Error> {
+            Ok(())
+        }
+    }
+
+    struct MockDevice {
+        path: PathBuf,
+        size: Unit,
+        label: String,
+    }
+
+    impl Device for MockDevice {
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn size(&self) -> Unit {
+            self.size
+        }
+
+        fn subsystems(&self) -> &str {
+            "mock:device"
+        }
+
+        fn filesystem(&self) -> Option<&str> {
+            Some("btrfs")
+        }
+
+        fn label(&self) -> Option<&str> {
+            Some(&self.label)
+        }
+
+        fn rota(&self) -> bool {
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn pool_new() {
+        const VOLS: &str = r#"ID 256 gen 33152047 top level 5 path zos-cache"#;
+        const GROUPS: &str = r#"qgroupid         rfer         excl     max_rfer     max_excl
+--------         ----         ----     --------     --------
+0/256      1732771840   1732771840 107374182400         none
+"#;
+
+        let device = MockDevice {
+            path: "/dev/mock".into(),
+            size: 100 * crate::GIGABYTE,
+            label: "test-device".into(),
+        };
+
+        let mut exec = crate::system::MockExecutor::default();
+        let list = Command::new("btrfs")
+            .arg("subvolume")
+            .arg("list")
+            .arg("-o")
+            .arg("/mnt/test-device");
+
+        let groups = Command::new("btrfs")
+            .arg("qgroup")
+            .arg("show")
+            .arg("-re")
+            .arg("--raw")
+            .arg("/mnt/test-device/zos-cache");
+
+        exec.expect_run()
+            .withf(move |arg: &Command| arg == &list)
+            .returning(|_| Ok(Vec::from(VOLS)));
+
+        exec.expect_run()
+            .withf(move |arg: &Command| arg == &groups)
+            .returning(|_| Ok(Vec::from(GROUPS)));
+
+        let pool = BtrfsPool::new(exec, MockSyscalls, device).await.unwrap();
+        // because device is NOT (and will never be) mounted. it means pool returned in the mock is always in Down state
+        let pool = match pool {
+            Pool::Down(pool) => pool,
+            _ => panic!("invalid pool type returned"),
+        };
+
+        let up = pool.up().await.unwrap();
+
+        assert_eq!(up.name(), "test-device");
+        assert_eq!(up.path(), Path::new("/mnt/test-device"));
+
+        let volumes = up.volumes().await.unwrap();
+        assert_eq!(volumes.len(), 1);
+        let cache = &volumes[0];
+
+        assert_eq!(cache.id(), 256);
+        assert_eq!(cache.path(), Path::new("/mnt/test-device/zos-cache"));
+
+        let usage = cache.usage().await.unwrap();
+        assert_eq!(usage.size, 100 * crate::GIGABYTE);
+        assert_eq!(usage.used, 100 * crate::GIGABYTE);
+    }
 
     #[test]
     fn utils_vol_info_parse() {
