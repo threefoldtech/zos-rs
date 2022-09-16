@@ -17,6 +17,10 @@ pub enum Error {
     InvalidDevice { device: PathBuf },
     #[error("invalid filesystem on device {device}")]
     InvalidFilesystem { device: PathBuf },
+    #[error("invalid volume {volume}")]
+    InvalidVolume { volume: PathBuf },
+    #[error("volume does not have associated qgroup")]
+    QGroupNotFound { volume: PathBuf },
     #[error("operation not support")]
     Unsupported,
 

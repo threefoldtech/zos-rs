@@ -49,10 +49,27 @@ where
     }
 
     async fn usage(&self) -> Result<Usage> {
-        //self.utils.
-        // todo: this should either return max limit or
-        // total used file space in a volume.
-        unimplemented!()
+        let qgroup = self
+            .utils
+            .qgroup_list(&self.path)
+            .await?
+            .into_iter()
+            .filter(|g| g.id == format!("0/{}", self.id))
+            .next();
+
+        let qgroup = qgroup.ok_or_else(|| Error::QGroupNotFound {
+            volume: self.path.clone(),
+        })?;
+
+        let used = match qgroup.max_rfer {
+            Some(used) => used,
+            None => unimplemented!(), //TODO: scan all files sizes
+        };
+
+        Ok(Usage {
+            used: used,
+            size: qgroup.max_rfer.unwrap_or(0),
+        })
     }
 }
 
@@ -71,6 +88,7 @@ where
             device: device.path().into(),
         })?;
 
+        // todo!: create btrfs filesystem and also enable quota
         if device.filesystem().is_none() || device.label().is_none() {
             return Err(Error::InvalidFilesystem {
                 device: device.path().into(),
@@ -217,15 +235,21 @@ where
     }
 
     async fn volume_delete<N: AsRef<str> + Send>(&self, name: N) -> Result<()> {
-        self.utils.volume_delete(&self.path, name).await
+        let name = name.as_ref();
+        let id = self.utils.volume_id(&self.path, name).await?;
+        self.utils.volume_delete(&self.path, name).await?;
+        self.utils.qgroup_delete(&self.path, id).await
     }
 }
 
 struct QGroupInfo {
     id: String,
+    #[allow(unused)]
     rfer: Unit,
+    #[allow(unused)]
     excl: Unit,
     max_rfer: Option<Unit>,
+    #[allow(unused)]
     max_excl: Option<Unit>,
 }
 
