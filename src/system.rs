@@ -1,5 +1,7 @@
+use nix::mount::{MntFlags, MsFlags};
 use std::ffi::OsString;
 use std::fmt::Display;
+use std::path::Path;
 use thiserror::Error;
 use tokio::process::Command as TokioCommand;
 
@@ -7,6 +9,7 @@ use tokio::process::Command as TokioCommand;
 pub enum Error {
     Spawn(#[from] std::io::Error),
     Exit { code: i32, stderr: Vec<u8> },
+    Unix(#[from] nix::Error),
 }
 
 impl Error {
@@ -36,6 +39,9 @@ impl Display for Error {
             }
             Error::Spawn(ref err) => {
                 write!(f, "failed to spawn command: {}", err)
+            }
+            Error::Unix(ref err) => {
+                write!(f, "{}", err)
             }
         }
     }
@@ -95,6 +101,23 @@ pub trait Executor {
     async fn run(&self, cmd: &Command) -> Result<Vec<u8>, Error>;
 }
 
+/// Syscalls trait to help with testing operations that requires calls
+/// to syscalls (over nix).
+/// Unfortunately, the automock does not work with lifetime generic arguments
+/// so we have to find another way to mock it.
+pub trait Syscalls {
+    fn mount<S: AsRef<str>, T: AsRef<Path>, F: AsRef<str>, D: AsRef<str>>(
+        &self,
+        source: Option<S>,
+        target: T,
+        fstype: Option<F>,
+        flags: MsFlags,
+        data: Option<D>,
+    ) -> Result<(), Error>;
+
+    fn umount<T: AsRef<Path>>(&self, target: T, flags: Option<MntFlags>) -> Result<(), Error>;
+}
+
 #[derive(Default, Clone)]
 /// System is the default executor
 /// that uses the tokio::process module
@@ -114,6 +137,36 @@ impl Executor for System {
         }
 
         Ok(out.stdout)
+    }
+}
+
+impl Syscalls for System {
+    fn mount<S: AsRef<str>, T: AsRef<Path>, F: AsRef<str>, D: AsRef<str>>(
+        &self,
+        source: Option<S>,
+        target: T,
+        fstype: Option<F>,
+        flags: MsFlags,
+        data: Option<D>,
+    ) -> Result<(), Error> {
+        nix::mount::mount(
+            source.as_ref().map(|v| v.as_ref()),
+            target.as_ref(),
+            fstype.as_ref().map(|f| f.as_ref()),
+            flags,
+            data.as_ref().map(|d| d.as_ref()),
+        )?;
+
+        //nix::mount::umount2(target, flags)
+        Ok(())
+    }
+
+    fn umount<T: AsRef<Path>>(&self, target: T, flags: Option<MntFlags>) -> Result<(), Error> {
+        match flags {
+            Some(flags) => nix::mount::umount2(target.as_ref(), flags)?,
+            None => nix::mount::umount(target.as_ref())?,
+        };
+        Ok(())
     }
 }
 
