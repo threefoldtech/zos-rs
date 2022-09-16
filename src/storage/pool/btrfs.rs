@@ -499,19 +499,19 @@ mod test {
     impl Syscalls for MockSyscalls {
         fn mount<S: AsRef<str>, T: AsRef<Path>, F: AsRef<str>, D: AsRef<str>>(
             &self,
-            source: Option<S>,
-            target: T,
-            fstype: Option<F>,
-            flags: nix::mount::MsFlags,
-            data: Option<D>,
+            _source: Option<S>,
+            _target: T,
+            _fstype: Option<F>,
+            _flags: nix::mount::MsFlags,
+            _data: Option<D>,
         ) -> Result<(), crate::system::Error> {
             Ok(())
         }
 
         fn umount<T: AsRef<Path>>(
             &self,
-            target: T,
-            flags: Option<nix::mount::MntFlags>,
+            _target: T,
+            _flags: Option<nix::mount::MntFlags>,
         ) -> Result<(), crate::system::Error> {
             Ok(())
         }
