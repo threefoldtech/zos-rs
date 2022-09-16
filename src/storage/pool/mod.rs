@@ -30,50 +30,74 @@ pub enum Error {
 
 type Result<T> = anyhow::Result<T, Error>;
 
+#[derive(Debug)]
+pub struct Usage {
+    pub size: Unit,
+    pub used: Unit,
+}
+/// Volume type.
 #[async_trait::async_trait]
-pub trait Volume {
+pub trait Volume<'a> {
+    /// numeric id of the volume
     fn id(&self) -> u64;
 
+    /// full path to the volume
     fn path(&self) -> &Path;
 
+    /// name of the volume
     fn name(&self) -> &str;
 
-    async fn limit(&self, size: Unit) -> Result<()>;
+    /// limit, set, update, or remove size limit of the volume
+    async fn limit(&self, size: Option<Unit>) -> Result<()>;
 
-    async fn usage(&self) -> Result<Unit>;
+    /// usage return size reserved or allocated by a volume
+    /// usually if limit is set, the limit is returned as usage
+    /// if no limit set, actual files size will be returned
+    async fn usage(&self) -> Result<Usage>;
 }
 
+/// UpPool is trait for a pool that is hooked to the system and accessible
 #[async_trait::async_trait]
-pub trait UpPool {
-    type DownPool: DownPool;
-    type Volume: Volume;
+pub trait UpPool<'a> {
+    /// DownPool is the type returned by (down) operation
+    type DownPool: DownPool<'a>;
 
+    /// Volume is associated volume type
+    type Volume: Volume<'a>;
+
+    /// path to the mounted pool
     fn path(&self) -> &Path;
 
+    /// name of the pool
     fn name(&self) -> &str;
 
-    async fn usage(&self) -> Result<Unit>;
+    /// usage of the pool
+    async fn usage(&self) -> Result<Usage>;
 
+    /// down bring the pool down and return a DownPool
     async fn down(self) -> Result<Self::DownPool>;
 
-    async fn volumes(&self) -> Result<Vec<Self::Volume>>;
+    /// create a volume
+    async fn volume_create<S: AsRef<str> + Send>(&'a self, name: S) -> Result<Self::Volume>;
 
-    async fn volume<S: AsRef<str> + Send>(&self, name: S) -> Result<Self::Volume>;
+    /// list all volumes in the pool
+    async fn volumes(&'a self) -> Result<Vec<Self::Volume>>;
 
-    async fn delete<S: AsRef<str> + Send>(&self, name: S) -> Result<()>;
+    /// delete volume pools
+    async fn volume_delete<S: AsRef<str> + Send>(&self, name: S) -> Result<()>;
 }
 
 #[async_trait::async_trait]
-pub trait DownPool {
-    type UpPool: UpPool;
+pub trait DownPool<'a> {
+    type UpPool: UpPool<'a>;
 
     async fn up(self) -> Result<Self::UpPool>;
 }
 
 pub enum Pool<U, D>
 where
-    U: UpPool,
-    D: DownPool,
+    U: UpPool<'static>,
+    D: DownPool<'static>,
 {
     Up(U),
     Down(D),

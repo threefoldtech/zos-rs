@@ -1,4 +1,4 @@
-use super::{DownPool, Error, Pool, Result, UpPool, Volume};
+use super::{DownPool, Error, Pool, Result, UpPool, Usage, Volume};
 use crate::storage::device::Device;
 use crate::system::{Command, Executor, Syscalls};
 use crate::Unit;
@@ -6,30 +6,31 @@ use std::path::{Path, PathBuf};
 /// root mount path
 const MNT: &str = "/mnt";
 
-pub struct BtrfsVolume<E>
+pub struct BtrfsVolume<'a, E>
 where
     E: Executor,
 {
-    utils: BtrfsUtils<E>,
+    utils: &'a BtrfsUtils<E>,
+    id: u64,
     path: PathBuf,
 }
 
-impl<E> BtrfsVolume<E>
+impl<'a, E> BtrfsVolume<'a, E>
 where
     E: Executor,
 {
-    fn new(exec: BtrfsUtils<E>, path: PathBuf) -> Self {
-        Self { utils: exec, path }
+    fn new(utils: &'a BtrfsUtils<E>, id: u64, path: PathBuf) -> Self {
+        Self { utils, id, path }
     }
 }
 
 #[async_trait::async_trait]
-impl<E> Volume for BtrfsVolume<E>
+impl<'a, E> Volume<'a> for BtrfsVolume<'a, E>
 where
-    E: Executor + Send + Sync,
+    E: Executor + Send + Sync + 'static,
 {
     fn id(&self) -> u64 {
-        unimplemented!()
+        self.id
     }
 
     fn path(&self) -> &Path {
@@ -43,11 +44,14 @@ where
             .unwrap_or("unknown")
     }
 
-    async fn limit(&self, size: Unit) -> Result<()> {
-        Err(Error::Unsupported)
+    async fn limit(&self, size: Option<Unit>) -> Result<()> {
+        self.utils.qgroup_limit(&self.path, size).await
     }
 
-    async fn usage(&self) -> Result<Unit> {
+    async fn usage(&self) -> Result<Usage> {
+        //self.utils.
+        // todo: this should either return max limit or
+        // total used file space in a volume.
         unimplemented!()
     }
 }
@@ -100,9 +104,9 @@ where
     device: D,
 }
 
-impl<E, S, D> BtrfsDownPool<E, S, D>
+impl<'a, E, S, D> BtrfsDownPool<E, S, D>
 where
-    E: Executor + Send + Sync,
+    E: Executor + Send + Sync + 'static,
     S: Syscalls + Send + Sync,
     D: Device + Send + Sync,
 {
@@ -112,7 +116,7 @@ where
 }
 
 #[async_trait::async_trait]
-impl<E, S, D> DownPool for BtrfsDownPool<E, S, D>
+impl<'a, E, S, D> DownPool<'a> for BtrfsDownPool<E, S, D>
 where
     E: Executor + Send + Sync + 'static,
     S: Syscalls + Send + Sync,
@@ -153,7 +157,7 @@ where
 
 impl<E, S, D> BtrfsUpPool<E, S, D>
 where
-    E: Executor + Send + Sync,
+    E: Executor + Send + Sync + 'static,
     S: Syscalls + Send + Sync,
     D: Device + Send + Sync,
 {
@@ -168,13 +172,13 @@ where
 }
 
 #[async_trait::async_trait]
-impl<E, S, D> UpPool for BtrfsUpPool<E, S, D>
+impl<'a, E, S, D> UpPool<'a> for BtrfsUpPool<E, S, D>
 where
     E: Executor + Send + Sync + 'static,
     S: Syscalls + Send + Sync,
     D: Device + Send + Sync,
 {
-    type Volume = BtrfsVolume<E>;
+    type Volume = BtrfsVolume<'a, E>;
     type DownPool = BtrfsDownPool<E, S, D>;
 
     fn path(&self) -> &Path {
@@ -186,7 +190,7 @@ where
         &self.device.label().unwrap()
     }
 
-    async fn usage(&self) -> Result<Unit> {
+    async fn usage(&self) -> Result<Usage> {
         unimplemented!()
     }
 
@@ -195,25 +199,25 @@ where
         Ok(BtrfsDownPool::new(self.utils, self.sys, self.device))
     }
 
-    async fn volumes(&self) -> Result<Vec<Self::Volume>> {
-        // Ok(self
-        //     .utils
-        //     .volume_list(&self.path)
-        //     .await?
-        //     .into_iter()
-        //     .map(|m| BtrfsVolume::new(self.utils.clone(), Path::new(&self.path).join(m.name)))
-        //     .collect())
-        unimplemented!()
+    async fn volumes(&'a self) -> Result<Vec<Self::Volume>> {
+        Ok(self
+            .utils
+            .volume_list(&self.path)
+            .await?
+            .into_iter()
+            .map(|m| BtrfsVolume::new(&self.utils, m.id, Path::new(&self.path).join(m.name)))
+            .collect())
     }
 
-    async fn volume<N: AsRef<str> + Send>(&self, name: N) -> Result<Self::Volume> {
-        self.utils.volume_id(&self.path, name).await?;
-        //Ok(BtrfsVolume{path: Path})
-        unimplemented!()
+    async fn volume_create<N: AsRef<str> + Send>(&'a self, name: N) -> Result<Self::Volume> {
+        let name = name.as_ref();
+        let path = self.utils.volume_create(&self.path, name).await?;
+        let id = self.utils.volume_id(&self.path, name).await?;
+        Ok(BtrfsVolume::new(&self.utils, id, path))
     }
 
-    async fn delete<N: AsRef<str> + Send>(&self, name: N) -> Result<()> {
-        unimplemented!()
+    async fn volume_delete<N: AsRef<str> + Send>(&self, name: N) -> Result<()> {
+        self.utils.volume_delete(&self.path, name).await
     }
 }
 
