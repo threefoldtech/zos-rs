@@ -682,7 +682,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
- "uuid",
+ "uuid 0.8.2",
  "workers",
 ]
 
@@ -1104,6 +1104,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "uuid"
+version = "1.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd6469f4314d5f1ffec476e05f17cc9a78bc7a27a6a857842170bdf8d6f98d2f"
+dependencies = [
+ "getrandom",
+]
+
+[[package]]
 name = "vec_map"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1222,4 +1231,5 @@ dependencies = [
  "thiserror",
  "tokio",
  "tui",
+ "uuid 1.1.2",
 ]

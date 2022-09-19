@@ -1,4 +1,4 @@
-use super::{Device, DeviceManager, DeviceType};
+use super::{Device, DeviceManager, DeviceType, Filesystem};
 use crate::system::{Command, Executor};
 use crate::Unit;
 use anyhow::{Context, Result};
@@ -164,6 +164,32 @@ where
             serde_json::from_slice(&output).context("failed to decode seektime output")?;
 
         Ok(output.typ)
+    }
+
+    async fn format(
+        &self,
+        device: Self::Device,
+        _filesystem: Filesystem,
+        force: bool,
+    ) -> Result<Self::Device> {
+        // only btrfs is supported atm
+        //let cmd
+        let id = uuid::Uuid::new_v4();
+        let mut cmd = Command::new("mkfs.btrfs")
+            .arg("-L")
+            .arg(id.hyphenated().to_string());
+        if force {
+            cmd = cmd.arg("-f");
+        }
+
+        cmd = cmd.arg(device.path());
+
+        self.exec
+            .run(&cmd)
+            .await
+            .with_context(|| format!("failed to run seektime for device: {:?}", device.path()))?;
+
+        self.device(device.path()).await
     }
 }
 
@@ -409,5 +435,11 @@ mod test {
         lsblk.exec.checkpoint();
 
         assert!(typ == DeviceType::SSD);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn lsblk_format() {
+        //todo!
     }
 }

@@ -14,6 +14,10 @@ pub enum DeviceType {
     SSD,
 }
 
+pub enum Filesystem {
+    Btrfs,
+}
+
 pub trait Device {
     fn path(&self) -> &Path;
 
@@ -42,4 +46,11 @@ pub trait DeviceManager {
     async fn shutdown(&self, device: &Self::Device) -> Result<()>;
 
     async fn seektime(&self, device: &Self::Device) -> Result<DeviceType>;
+
+    async fn format(
+        &self,
+        device: Self::Device,
+        filesystem: Filesystem,
+        force: bool,
+    ) -> Result<Self::Device>;
 }
