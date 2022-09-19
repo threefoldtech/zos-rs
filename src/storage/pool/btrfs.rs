@@ -179,7 +179,7 @@ where
             })?);
 
         self.sys.mount(
-            self.device.path().to_str(),
+            Some(self.device.path()),
             &path,
             Option::<&str>::None,
             nix::mount::MsFlags::empty(),
@@ -497,7 +497,7 @@ mod test {
     // should be improved to validate the inputs
     struct MockSyscalls;
     impl Syscalls for MockSyscalls {
-        fn mount<S: AsRef<str>, T: AsRef<Path>, F: AsRef<str>, D: AsRef<str>>(
+        fn mount<S: AsRef<Path>, T: AsRef<Path>, F: AsRef<str>, D: AsRef<str>>(
             &self,
             _source: Option<S>,
             _target: T,
