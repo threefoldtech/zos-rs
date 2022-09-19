@@ -106,7 +106,7 @@ pub trait Executor {
 /// Unfortunately, the automock does not work with lifetime generic arguments
 /// so we have to find another way to mock it.
 pub trait Syscalls {
-    fn mount<S: AsRef<str>, T: AsRef<Path>, F: AsRef<str>, D: AsRef<str>>(
+    fn mount<S: AsRef<Path>, T: AsRef<Path>, F: AsRef<str>, D: AsRef<str>>(
         &self,
         source: Option<S>,
         target: T,
@@ -141,7 +141,7 @@ impl Executor for System {
 }
 
 impl Syscalls for System {
-    fn mount<S: AsRef<str>, T: AsRef<Path>, F: AsRef<str>, D: AsRef<str>>(
+    fn mount<S: AsRef<Path>, T: AsRef<Path>, F: AsRef<str>, D: AsRef<str>>(
         &self,
         source: Option<S>,
         target: T,
