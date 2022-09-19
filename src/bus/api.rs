@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::bus::types::{
     net::{ExitDevice, IPNet, OptionPublicConfig},
     stats::{Capacity, TimesStat, VirtualMemory},
@@ -86,7 +88,7 @@ pub trait Flist {
         name: String,
         url: String,
         options: storage::MountOptions,
-    ) -> Result<String>;
+    ) -> Result<PathBuf>;
 
     /// unmount mount with name
     #[rename("Unmount")]
