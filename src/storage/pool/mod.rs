@@ -1,4 +1,3 @@
-use crate::storage::device::Device;
 use crate::Unit;
 /// a pool is a wrapper around a disk device. right now a single pool
 /// uses a single disk device.
@@ -107,8 +106,13 @@ where
     U: UpPool<'static>,
     D: DownPool<'static>,
 {
+    /// Up pool state
     Up(U),
+    /// Down pool stat
     Down(D),
+    /// the none value is used as a place holder
+    /// to be used with mem::replace or mem::swap
+    None,
 }
 
 impl<U, D> Pool<U, D>
@@ -121,6 +125,7 @@ where
         match self {
             Self::Up(up) => up.name(),
             Self::Down(down) => down.name(),
+            Self::None => unimplemented!(), //shouldn't happen
         }
     }
 }
