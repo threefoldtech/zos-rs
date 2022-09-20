@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 
 use crate::Unit;
@@ -8,9 +10,9 @@ pub struct Usage {
 
 // Volume struct is a btrfs subvolume
 pub struct Volume {
-    name: String,
-    path: String,
-    usage: Usage,
+    pub name: String,
+    pub path: PathBuf,
+    pub usage: Usage,
 }
 
 pub trait VolumeAllocator {
@@ -20,17 +22,17 @@ pub trait VolumeAllocator {
     // more space is available in such a pool, `ErrNotEnoughSpace` is returned.
     // It is up to the caller to handle such a situation and decide if he wants
     // to try again on a different devicetype
-    fn create(name: String, size: Unit) -> Result<Volume>;
+    fn create<S: AsRef<str>>(&self, name: S, size: Unit) -> Result<Volume>;
 
     // VolumeUpdate changes the size of an already existing volume
-    fn update(name: String, size: Unit) -> Result<()>;
+    fn update<S: AsRef<str>>(&self, name: S, size: Unit) -> Result<()>;
 
     // ReleaseFilesystem signals that the named filesystem is no longer needed.
     // The filesystem will be unmounted and subsequently removed.
     // All data contained in the filesystem will be lost, and the
     // space which has been reserved for this filesystem will be reclaimed.
-    fn delete(cname: String) -> Result<()>;
+    fn delete<S: AsRef<str>>(&self, cname: S) -> Result<()>;
     // Path return the filesystem named name
     // if no filesystem with this name exists, an error is returned
-    fn lookup(name: String) -> Result<Volume>;
+    fn lookup<S: AsRef<str>>(&self, name: S) -> Result<Volume>;
 }

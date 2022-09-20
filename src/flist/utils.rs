@@ -1,7 +1,10 @@
-use crate::system::{Command, Executor};
+use crate::env;
+use crate::system::{Command, Executor, Syscalls};
 use anyhow::{bail, Result};
 use bytes::buf::Reader;
 use bytes::{Buf, Bytes};
+use nix::libc::mount;
+use reqwest::IntoUrl;
 use std::io::{Error, ErrorKind};
 use std::os::unix::prelude::PermissionsExt;
 use std::path::PathBuf;
@@ -12,15 +15,18 @@ use std::{
 };
 use tokio::time;
 
-use super::mgr::DiskMgr;
 // downloadFlist downloads an flits from a URL
 // if the flist location also provide and md5 hash of the flist
 // this function will use it to avoid downloading an flist that is
 // already present locally
-pub async fn download_flist(url: &str, flist_path: &PathBuf) -> Result<PathBuf> {
+pub async fn download_flist<P: AsRef<Path>, T: AsRef<str>>(
+    url: T,
+    flist_path: P,
+) -> Result<PathBuf> {
     // first check if the md5 of the flist is available
-    let hash = hash_of_flist(&url).await?;
-    let path = Path::new(flist_path).join(&hash.trim());
+    let url = url.as_ref();
+    let hash = hash_of_flist(url).await?;
+    let path = flist_path.as_ref().join(&hash.trim());
     match File::open(&path) {
         Ok(_) => {
             //Flist already exists let's check it's md5
@@ -38,20 +44,21 @@ pub async fn download_flist(url: &str, flist_path: &PathBuf) -> Result<PathBuf> 
             ),
         },
     };
-
     // Flist not found or hash is not correct, let's download
     let mut resp = reqwest::get(url).await?.bytes().await?.reader();
-    return save_flist(&mut resp, flist_path).await;
+    return save_flist(&mut resp, flist_path.as_ref()).await;
 }
 
-pub async fn save_flist(resp: &mut Reader<Bytes>, flist_path: &PathBuf) -> Result<PathBuf> {
+pub async fn save_flist<P: AsRef<Path>>(
+    resp: &mut Reader<Bytes>,
+    flist_path: P,
+) -> Result<PathBuf> {
     let mut builder = tempfile::Builder::new();
-    let mut file = builder.suffix("_flist_temp").tempfile_in(flist_path)?;
-    // TODO: use multiwriter
+    let mut file = builder.suffix("_flist_temp").tempfile_in(&flist_path)?;
     io::copy(resp, &mut file)?;
     let tmp_path = file.path();
     let hash = checksums::hash_file(Path::new(&tmp_path), checksums::Algorithm::MD5).to_lowercase();
-    let path = Path::new(flist_path).join(&hash);
+    let path = flist_path.as_ref().join(&hash);
     if let Some(parent_dir) = path.parent() {
         fs::create_dir_all(parent_dir)?;
         let permissions = Permissions::from_mode(0o755);
@@ -66,8 +73,8 @@ pub async fn save_flist(resp: &mut Reader<Bytes>, flist_path: &PathBuf) -> Resul
     Ok(path)
 }
 
-pub async fn hash_of_flist(url: &str) -> Result<String> {
-    let md5_url = format!("{url}.md5");
+pub async fn hash_of_flist<S: AsRef<str>>(url: S) -> Result<String> {
+    let md5_url = format!("{}.md5", url.as_ref());
     let res = reqwest::get(md5_url)
         .await?
         .text()
@@ -77,31 +84,31 @@ pub async fn hash_of_flist(url: &str) -> Result<String> {
     Ok(res)
 }
 
-pub fn compare_md5<P: AsRef<str>>(hash: P, path: &PathBuf) -> Result<bool> {
+pub fn compare_md5<S: AsRef<str>, P: AsRef<Path>>(hash: S, path: P) -> Result<bool> {
     // create a Md5 hasher instance
     let calculated_hash =
-        checksums::hash_file(Path::new(path), checksums::Algorithm::MD5).to_lowercase();
+        checksums::hash_file(path.as_ref(), checksums::Algorithm::MD5).to_lowercase();
     Ok(calculated_hash == hash.as_ref())
 }
 
-pub fn mountpath(name: String, mountpoint_path: &PathBuf) -> Result<PathBuf> {
-    let mountpath = Path::new(mountpoint_path).join(&name);
-    if mountpath.parent() != Some(mountpoint_path) {
-        bail!("inavlid mount name: {}", &name);
+pub fn mountpath<S: AsRef<str>, P: AsRef<Path>>(name: S, mountpoint_path: P) -> Result<PathBuf> {
+    let mountpath = Path::new(mountpoint_path.as_ref()).join(name.as_ref());
+    if mountpath.parent() != Some(mountpoint_path.as_ref()) {
+        bail!("inavlid mount name: {}", name.as_ref());
     }
     Ok(mountpath)
 }
 
-pub fn flist_mount_path(hash: &str, ro_path: &PathBuf) -> Result<PathBuf> {
-    let mountpath = Path::new(ro_path).join(hash);
-    if mountpath.parent() != Some(ro_path) {
+pub fn flist_mount_path<P: AsRef<Path>>(hash: &str, ro_path: P) -> Result<PathBuf> {
+    let mountpath = ro_path.as_ref().join(hash);
+    if mountpath.parent() != Some(ro_path.as_ref()) {
         bail!("invalid mount name")
     }
 
     Ok(mountpath)
 }
-pub async fn is_mountpoint<E: Executor>(path: &PathBuf, executor: &E) -> Result<Vec<u8>> {
-    if let Some(path_str) = path.as_os_str().to_str() {
+pub async fn is_mountpoint<E: Executor, P: AsRef<Path>>(path: P, executor: &E) -> Result<Vec<u8>> {
+    if let Some(path_str) = path.as_ref().as_os_str().to_str() {
         let cmd = Command::new("mountpoint").arg(path_str);
         Ok(executor.run(&cmd).await?)
     } else {
@@ -109,24 +116,24 @@ pub async fn is_mountpoint<E: Executor>(path: &PathBuf, executor: &E) -> Result<
     }
 }
 
-pub async fn valid<E: Executor, D: DiskMgr>(
-    path: &PathBuf,
+pub async fn valid<E: Executor, S: Syscalls, P: AsRef<Path>>(
+    path: P,
     executor: &E,
-    disk_mgr: &D,
+    syscalls: &S,
 ) -> Result<(), Error> {
-    match fs::metadata(path) {
+    match fs::metadata(&path) {
         Ok(info) => {
             if !info.is_dir() {
                 return Err(Error::new(
                     ErrorKind::Other,
-                    format!("{} is not a directory", path.display().to_string()),
+                    format!("{} is not a directory", path.as_ref().display().to_string()),
                 ));
             }
             match is_mountpoint(&path, executor).await {
                 Ok(_) => {
                     return Err(Error::new(
                         ErrorKind::AlreadyExists,
-                        format!("{} is already mounted", path.display().to_string()),
+                        format!("{} is already mounted", path.as_ref().display().to_string()),
                     ));
                 }
                 _ => return Ok(()),
@@ -135,7 +142,7 @@ pub async fn valid<E: Executor, D: DiskMgr>(
         Err(error) => match error.kind() {
             io::ErrorKind::NotFound => return Ok(()),
             // transport endpoint is not connected
-            io::ErrorKind::ConnectionAborted => match disk_mgr.unmount(path) {
+            io::ErrorKind::ConnectionAborted => match syscalls.umount(path, None) {
                 Ok(_) => return Ok(()),
                 Err(_) => return Err(Error::new(ErrorKind::Other, "can not do unmount")),
             },
@@ -143,39 +150,39 @@ pub async fn valid<E: Executor, D: DiskMgr>(
         },
     };
 }
-pub async fn mount_bind<D: DiskMgr, E: Executor>(
-    name: String,
-    ro: &PathBuf,
-    mountpoint: &PathBuf,
-    disk_mgr: &D,
+pub async fn mount_bind<N: AsRef<str>, S: Syscalls, E: Executor, P: AsRef<Path>, T: AsRef<Path>>(
+    name: N,
+    ro: P,
+    mountpoint: T,
+    syscalls: &S,
     executor: &E,
 ) -> Result<bool> {
     let mountpoint = mountpath(name, mountpoint)?;
     fs::create_dir_all(&mountpoint)?;
     let permissions = Permissions::from_mode(0755);
     fs::set_permissions(&mountpoint, permissions)?;
-    if let Err(_) = disk_mgr.mount(
-        Some(&ro),
+    if let Err(_) = syscalls.mount(
+        Some(ro),
         &mountpoint,
         Some("bind"),
         nix::mount::MsFlags::MS_BIND,
-        None,
+        Option::<&str>::None,
     ) {
-        disk_mgr.unmount(&mountpoint);
+        syscalls.umount(&mountpoint, None);
         return Ok(false);
     };
     wait_mountpoint(&mountpoint, 3, executor).await?;
     Ok(true)
 }
-pub async fn wait_mountpoint<E: Executor>(
-    path: &PathBuf,
+pub async fn wait_mountpoint<E: Executor, P: AsRef<Path>>(
+    path: P,
     seconds: u32,
     executor: &E,
 ) -> Result<()> {
     let mut duration = seconds;
-    while duration >= 0 {
+    while duration > 0 {
         time::sleep(time::Duration::from_secs(1)).await;
-        if let Ok(_) = is_mountpoint(path, executor).await {
+        if let Ok(_) = is_mountpoint(path.as_ref(), executor).await {
             return Ok(());
         }
         duration -= 1;
@@ -187,7 +194,7 @@ pub async fn wait_mountpoint<E: Executor>(
 #[cfg(test)]
 mod test {
     use super::{download_flist, hash_of_flist};
-    use std::{ffi::OsStr, fs, path::Path, time::SystemTime};
+    use std::{ffi::OsStr, fs, path::Path};
 
     #[tokio::test]
     async fn test_download_flist() {
@@ -208,5 +215,11 @@ mod test {
         // make sure the second file is not created because it is the same file
         assert_eq!(first_file_created, second_file_created);
         fs::remove_dir_all("/tmp/flist_test").unwrap();
+    }
+    #[tokio::test]
+    async fn test_hash_of_flist() {
+        let url = "https://hub.grid.tf/ashraf.3bot/ashraffouda-mattermost-latest.flist";
+        let hash = hash_of_flist(url).await.unwrap();
+        assert_eq!(hash, "efc9269253cb7210d6eded4aa53b7dfc")
     }
 }
