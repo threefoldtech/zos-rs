@@ -1,12 +1,13 @@
-use crate::Unit;
 /// a pool is a wrapper around a disk device. right now a single pool
 /// uses a single disk device.
+use crate::storage::device::Device;
+use crate::Unit;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 // define error type?
 
 pub mod btrfs;
-pub use btrfs::DefaultBtrfsPool;
+pub use btrfs::BtrfsManager;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -128,4 +129,14 @@ where
             Self::None => unimplemented!(), //shouldn't happen
         }
     }
+}
+
+#[async_trait::async_trait]
+pub trait PoolManager<V, U, D>
+where
+    V: Device,
+    U: UpPool<'static>,
+    D: DownPool<'static>,
+{
+    async fn get(&self, device: V) -> Result<Pool<U, D>>;
 }

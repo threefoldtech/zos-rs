@@ -1,36 +1,45 @@
 use crate::cache::Store;
 use crate::storage::device::{DeviceManager, DeviceType};
-use crate::storage::pool::{DefaultBtrfsPool as BtrfsPool, DownPool, UpPool, Volume};
+use crate::storage::pool::{DownPool, UpPool, Volume};
 use crate::system::{MsFlags, Syscalls, System};
 use crate::Unit;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 
 use super::device::{Device, Filesystem};
+use super::pool::{Pool, PoolManager};
 
 const FORCE_FORMAT: bool = false;
 const CACHE_VOLUME: &str = "zos-cache";
 const CACHE_TARGET: &str = "/var/cache";
 
-pub struct Manager<M>
+pub struct Manager<M, P, U, D>
 where
     M: DeviceManager,
+    U: UpPool<'static>,
+    D: DownPool<'static>,
+    P: PoolManager<M::Device, U, D>,
 {
-    mgr: M,
-    ssds: HashMap<String, BtrfsPool<M::Device>>,
-    hdds: HashMap<String, BtrfsPool<M::Device>>,
+    device_mgr: M,
+    pool_mgr: P,
+    ssds: HashMap<String, Pool<U, D>>,
+    hdds: HashMap<String, Pool<U, D>>,
     cache: Store<DeviceType>,
     ssd_size: Unit,
     hdd_size: Unit,
 }
 
-impl<M> Manager<M>
+impl<M, P, U, D> Manager<M, P, U, D>
 where
     M: DeviceManager,
+    U: UpPool<'static>,
+    D: DownPool<'static>,
+    P: PoolManager<M::Device, U, D>,
 {
-    pub async fn new(mgr: M) -> Result<Self> {
+    pub async fn new(device_mgr: M, pool_mgr: P) -> Result<Self> {
         let mut this = Self {
-            mgr,
+            device_mgr,
+            pool_mgr,
             ssds: HashMap::default(),
             hdds: HashMap::default(),
             cache: Store::new("storage", 1 * crate::MEGABYTE)
@@ -62,7 +71,7 @@ where
         }
 
         // if not set, then we need to use the seektime to get and set it
-        let t = self.mgr.seektime(device).await?;
+        let t = self.device_mgr.seektime(device).await?;
         self.cache.set(name, &t).await.with_context(|| {
             format!("failed to cache detected device type: {:?}", device.path())
         })?;
@@ -74,7 +83,7 @@ where
         if self.is_formatted(&device) {
             Ok(device)
         } else if FORCE_FORMAT {
-            self.mgr
+            self.device_mgr
                 .format(device, Filesystem::Btrfs, FORCE_FORMAT)
                 .await
         } else {
@@ -90,7 +99,7 @@ where
         // search mounted pool first
         for (_, pool) in self.ssds.iter() {
             let up = match pool {
-                BtrfsPool::Up(ref up) => up,
+                Pool::Up(ref up) => up,
                 _ => continue,
             };
 
@@ -135,7 +144,7 @@ where
     }
 
     async fn initialize(&mut self) -> Result<()> {
-        let devices = self.mgr.devices().await?;
+        let devices = self.device_mgr.devices().await?;
         for device in devices {
             let device = match self.prepare(device).await {
                 Ok(device) => device,
@@ -157,7 +166,7 @@ where
                 }
             };
 
-            let pool = match BtrfsPool::new(device).await {
+            let pool = match self.pool_mgr.get(device).await {
                 Ok(pool) => pool,
                 Err(err) => {
                     log::error!("failed to initialize pool for device: {}", err);
@@ -168,12 +177,12 @@ where
 
             // we need to bring the pool up to calculate the size
             let up = match pool {
-                BtrfsPool::Up(up) => up,
-                BtrfsPool::Down(down) => {
+                Pool::Up(up) => up,
+                Pool::Down(down) => {
                     // bring up first.
                     down.up().await?
                 }
-                BtrfsPool::None => {
+                Pool::None => {
                     unreachable!()
                 }
             };
@@ -181,9 +190,9 @@ where
             let usage = up.usage().await?;
 
             let pool = if up.volumes().await?.len() == 0 {
-                BtrfsPool::Down(up.down().await?)
+                Pool::Down(up.down().await?)
             } else {
-                BtrfsPool::Up(up)
+                Pool::Up(up)
             };
 
             // todo: clean up hdd disks

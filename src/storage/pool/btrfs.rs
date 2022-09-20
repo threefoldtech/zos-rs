@@ -1,4 +1,4 @@
-use super::{DownPool, Error, Pool, Result, UpPool, Usage, Volume};
+use super::{DownPool, Error, Pool, PoolManager, Result, UpPool, Usage, Volume};
 use crate::storage::device::Device;
 use crate::system::{Command, Executor, Syscalls};
 use crate::Unit;
@@ -96,57 +96,6 @@ where
             used: used,
             size: qgroup.max_rfer.unwrap_or(0),
         })
-    }
-}
-
-/// shorthand for a btrfs pool
-pub type BtrfsPool<E, S, D> = Pool<BtrfsUpPool<E, S, D>, BtrfsDownPool<E, S, D>>;
-
-impl<E, S, D> BtrfsPool<E, S, D>
-where
-    E: Executor + Send + Sync + 'static,
-    S: Syscalls + Send + Sync,
-    D: Device + Send + Sync,
-{
-    /// create a new btrfs pool from device. the device must have a valid
-    /// btrfs filesystem.
-    async fn with(exec: E, sys: S, device: D) -> Result<Self> {
-        let path = device.path().to_str().ok_or_else(|| Error::InvalidDevice {
-            device: device.path().into(),
-        })?;
-
-        // todo!: create btrfs filesystem and also enable quota
-        if device.filesystem().is_none() || device.label().is_none() {
-            return Err(Error::InvalidFilesystem {
-                device: device.path().into(),
-            });
-        }
-
-        let mnt = crate::storage::mountinfo(path)
-            .await?
-            .into_iter()
-            .filter(|m| matches!(m.option("subvol"), Some(Some(v)) if v == "/"))
-            .next();
-
-        let utils = BtrfsUtils::new(exec);
-        match mnt {
-            Some(mnt) => Ok(BtrfsPool::Up(BtrfsUpPool::new(
-                utils, sys, mnt.target, device,
-            ))),
-            None => Ok(BtrfsPool::Down(BtrfsDownPool::new(utils, sys, device))),
-        }
-    }
-}
-
-/// default btrfs pool implementation
-pub type DefaultBtrfsPool<V> = BtrfsPool<crate::system::System, crate::system::System, V>;
-
-impl<V> DefaultBtrfsPool<V>
-where
-    V: Device + Send + Sync,
-{
-    pub async fn new(device: V) -> Result<Self> {
-        BtrfsPool::with(crate::system::System, crate::system::System, device).await
     }
 }
 
@@ -298,6 +247,76 @@ where
         let id = self.utils.volume_id(&self.path, name).await?;
         self.utils.volume_delete(&self.path, name).await?;
         self.utils.qgroup_delete(&self.path, id).await
+    }
+}
+
+/// shorthand for a btrfs pool
+pub type BtrfsPool<E, S, D> = Pool<BtrfsUpPool<E, S, D>, BtrfsDownPool<E, S, D>>;
+
+impl<E, S, D> BtrfsPool<E, S, D>
+where
+    E: Executor + Send + Sync + 'static,
+    S: Syscalls + Send + Sync,
+    D: Device + Send + Sync,
+{
+    /// create a new btrfs pool from device. the device must have a valid
+    /// btrfs filesystem.
+    async fn with(exec: E, sys: S, device: D) -> Result<Self> {
+        let path = device.path().to_str().ok_or_else(|| Error::InvalidDevice {
+            device: device.path().into(),
+        })?;
+
+        // todo!: create btrfs filesystem and also enable quota
+        if device.filesystem().is_none() || device.label().is_none() {
+            return Err(Error::InvalidFilesystem {
+                device: device.path().into(),
+            });
+        }
+
+        let mnt = crate::storage::mountinfo(path)
+            .await?
+            .into_iter()
+            .filter(|m| matches!(m.option("subvol"), Some(Some(v)) if v == "/"))
+            .next();
+
+        let utils = BtrfsUtils::new(exec);
+        match mnt {
+            Some(mnt) => Ok(BtrfsPool::Up(BtrfsUpPool::new(
+                utils, sys, mnt.target, device,
+            ))),
+            None => Ok(BtrfsPool::Down(BtrfsDownPool::new(utils, sys, device))),
+        }
+    }
+}
+
+pub struct BtrfsManager<E, S>
+where
+    E: Executor + Clone,
+    S: Syscalls + Clone,
+{
+    exec: E,
+    sys: S,
+}
+
+impl<E, S> BtrfsManager<E, S>
+where
+    E: Executor + Clone + Send + Sync + 'static,
+    S: Syscalls + Clone + Send + Sync,
+{
+    pub fn new(exec: E, sys: S) -> Self {
+        Self { exec, sys }
+    }
+}
+
+#[async_trait::async_trait]
+impl<E, S, V> PoolManager<V, BtrfsUpPool<E, S, V>, BtrfsDownPool<E, S, V>> for BtrfsManager<E, S>
+where
+    E: Executor + Clone + Send + Sync + 'static,
+    S: Syscalls + Clone + Send + Sync,
+    V: Device + Send + Sync + 'static,
+{
+    async fn get(&self, device: V) -> Result<BtrfsPool<E, S, V>> {
+        BtrfsPool::with(self.exec.clone(), self.sys.clone(), device).await
     }
 }
 
