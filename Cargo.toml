@@ -42,7 +42,6 @@ tempdir = "0.3.7"
 tempfile= "3.3.0"
 srmw = "0.1.1"
 filepath = "0.1.2"
-nix = "0.25.0"
 checksums = "0.9.1"
 
 [dev-dependencies]
