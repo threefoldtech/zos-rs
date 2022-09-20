@@ -34,7 +34,7 @@ pub trait Device {
 
 #[async_trait::async_trait]
 pub trait DeviceManager {
-    type Device: Device;
+    type Device: Device + Send + Sync;
 
     /// list all devices
     async fn devices(&self) -> Result<Vec<Self::Device>>;

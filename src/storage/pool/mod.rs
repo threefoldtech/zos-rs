@@ -1,3 +1,4 @@
+use crate::storage::device::Device;
 use crate::Unit;
 /// a pool is a wrapper around a disk device. right now a single pool
 /// uses a single disk device.
@@ -97,6 +98,8 @@ pub trait DownPool<'a> {
     type UpPool: UpPool<'a>;
 
     async fn up(self) -> Result<Self::UpPool>;
+
+    fn name(&self) -> &str;
 }
 
 pub enum Pool<U, D>
@@ -106,4 +109,18 @@ where
 {
     Up(U),
     Down(D),
+}
+
+impl<U, D> Pool<U, D>
+where
+    U: UpPool<'static>,
+    D: DownPool<'static>,
+{
+    /// return the name of the pool
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Up(up) => up.name(),
+            Self::Down(down) => down.name(),
+        }
+    }
 }
