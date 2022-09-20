@@ -1,5 +1,6 @@
 pub mod app;
 pub mod bus;
+pub mod cache;
 pub mod env;
 pub mod flist;
 pub mod kernel;
