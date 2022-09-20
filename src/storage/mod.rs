@@ -1,4 +1,5 @@
 pub mod device;
+pub mod manager;
 pub mod pool;
 
 use anyhow::{Context, Result};

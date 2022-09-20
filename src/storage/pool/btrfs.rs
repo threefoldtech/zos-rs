@@ -101,8 +101,6 @@ where
 
 /// shorthand for a btrfs pool
 pub type BtrfsPool<E, S, D> = Pool<BtrfsUpPool<E, S, D>, BtrfsDownPool<E, S, D>>;
-/// default btrfs pool implementation
-pub type DefaultBtrfsPool<D> = BtrfsPool<crate::system::System, crate::system::System, D>;
 
 impl<E, S, D> BtrfsPool<E, S, D>
 where
@@ -112,7 +110,7 @@ where
 {
     /// create a new btrfs pool from device. the device must have a valid
     /// btrfs filesystem.
-    pub async fn new(exec: E, sys: S, device: D) -> Result<Self> {
+    async fn with(exec: E, sys: S, device: D) -> Result<Self> {
         let path = device.path().to_str().ok_or_else(|| Error::InvalidDevice {
             device: device.path().into(),
         })?;
@@ -137,6 +135,18 @@ where
             ))),
             None => Ok(BtrfsPool::Down(BtrfsDownPool::new(utils, sys, device))),
         }
+    }
+}
+
+/// default btrfs pool implementation
+pub type DefaultBtrfsPool<V> = BtrfsPool<crate::system::System, crate::system::System, V>;
+
+impl<V> DefaultBtrfsPool<V>
+where
+    V: Device + Send + Sync,
+{
+    pub async fn new(device: V) -> Result<Self> {
+        BtrfsPool::with(crate::system::System, crate::system::System, device).await
     }
 }
 
@@ -170,6 +180,11 @@ where
     D: Device + Send + Sync,
 {
     type UpPool = BtrfsUpPool<E, S, D>;
+
+    fn name(&self) -> &str {
+        // if we are at this state so device MUST have a label so it's safe to do this
+        &self.device.label().unwrap()
+    }
 
     async fn up(mut self) -> Result<Self::UpPool> {
         // mount the device and return the proper UpPool
@@ -585,7 +600,7 @@ mod test {
             .withf(move |arg: &Command| arg == &groups)
             .returning(|_| Ok(Vec::from(GROUPS)));
 
-        let pool = BtrfsPool::new(exec, MockSyscalls, device).await.unwrap();
+        let pool = BtrfsPool::with(exec, MockSyscalls, device).await.unwrap();
         // because device is NOT (and will never be) mounted. it means pool returned in the mock is always in Down state
         let pool = match pool {
             Pool::Down(pool) => pool,
