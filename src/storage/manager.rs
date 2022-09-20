@@ -1,12 +1,16 @@
 use crate::cache::Store;
 use crate::storage::device::{DeviceManager, DeviceType};
-use crate::storage::pool::DefaultBtrfsPool as BtrfsPool;
+use crate::storage::pool::{DefaultBtrfsPool as BtrfsPool, DownPool, UpPool, Volume};
+use crate::system::{MsFlags, Syscalls, System};
+use crate::Unit;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 
 use super::device::{Device, Filesystem};
 
 const FORCE_FORMAT: bool = false;
+const CACHE_VOLUME: &str = "zos-cache";
+const CACHE_TARGET: &str = "/var/cache";
 
 pub struct Manager<M>
 where
@@ -16,6 +20,8 @@ where
     ssds: HashMap<String, BtrfsPool<M::Device>>,
     hdds: HashMap<String, BtrfsPool<M::Device>>,
     cache: Store<DeviceType>,
+    ssd_size: Unit,
+    hdd_size: Unit,
 }
 
 impl<M> Manager<M>
@@ -30,10 +36,13 @@ where
             cache: Store::new("storage", 1 * crate::MEGABYTE)
                 .await
                 .context("failed to initialize storage disk type cache")?,
+            ssd_size: 0,
+            hdd_size: 0,
         };
 
         this.initialize().await?;
 
+        // setup cache partition
         Ok(this)
     }
 
@@ -76,6 +85,55 @@ where
         }
     }
 
+    // search all ssd storage for a volume with given name
+    async fn find_volume<S: AsRef<str>>(&self, name: S) -> Result<Option<impl Volume>> {
+        // search mounted pool first
+        for (_, pool) in self.ssds.iter() {
+            let up = match pool {
+                BtrfsPool::Up(ref up) => up,
+                _ => continue,
+            };
+
+            let vol = up
+                .volumes()
+                .await?
+                .into_iter()
+                .filter(|v| v.name() == name.as_ref())
+                .next();
+
+            if let Some(vol) = vol {
+                return Ok(Some(vol));
+            }
+        }
+
+        Ok(None)
+    }
+
+    async fn ensure_cache(&self) -> Result<()> {
+        let mnt = super::mountpoint(CACHE_TARGET)
+            .await
+            .context("failed to check mount for cache")?;
+
+        if mnt.is_some() {
+            return Ok(());
+        }
+
+        let vol = match self.find_volume(CACHE_VOLUME).await? {
+            Some(vol) => vol,
+            None => unimplemented!(), // create a volume
+        };
+
+        System.mount(
+            Some(vol.path()),
+            CACHE_TARGET,
+            Option::<&str>::None,
+            MsFlags::MS_BIND,
+            Option::<&str>::None,
+        )?;
+
+        Ok(())
+    }
+
     async fn initialize(&mut self) -> Result<()> {
         let devices = self.mgr.devices().await?;
         for device in devices {
@@ -108,12 +166,43 @@ where
                 }
             };
 
+            // we need to bring the pool up to calculate the size
+            let up = match pool {
+                BtrfsPool::Up(up) => up,
+                BtrfsPool::Down(down) => {
+                    // bring up first.
+                    down.up().await?
+                }
+                BtrfsPool::None => {
+                    unreachable!()
+                }
+            };
+
+            let usage = up.usage().await?;
+
+            let pool = if up.volumes().await?.len() == 0 {
+                BtrfsPool::Down(up.down().await?)
+            } else {
+                BtrfsPool::Up(up)
+            };
+
+            // todo: clean up hdd disks
+
             match device_typ {
-                DeviceType::SSD => self.ssds.insert(pool.name().into(), pool),
-                DeviceType::HDD => self.hdds.insert(pool.name().into(), pool),
+                DeviceType::SSD => {
+                    self.ssd_size += usage.size;
+                    self.ssds.insert(pool.name().into(), pool);
+                }
+                DeviceType::HDD => {
+                    self.hdd_size += usage.size;
+                    self.hdds.insert(pool.name().into(), pool);
+                }
             };
         }
 
+        // not at this point all pools are "created" but not all of them
+        // are actually in up state.
+        // hence finding, and/or mounting zos-cache
         Ok(())
     }
 }

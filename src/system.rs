@@ -1,4 +1,4 @@
-use nix::mount::{MntFlags, MsFlags};
+pub use nix::mount::{MntFlags, MsFlags};
 use std::ffi::OsString;
 use std::fmt::Display;
 use std::path::Path;
