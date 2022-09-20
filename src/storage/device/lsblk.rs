@@ -19,7 +19,7 @@ pub struct LsblkDevice {
 
 impl Device for LsblkDevice {
     fn path(&self) -> &Path {
-        self.path.as_path()
+        &self.path
     }
 
     fn size(&self) -> Unit {
