@@ -92,17 +92,17 @@ pub trait Flist {
 
     /// unmount mount with name
     #[rename("Unmount")]
-    async fn unmount(name: String) -> Result<()>;
+    async fn unmount(&self, name: String) -> Result<()>;
 
     // UpdateMountSize change the mount size
     #[rename("UpdateMountSize")]
-    async fn update(name: String, size: Unit) -> Result<String>;
+    async fn update(&self, name: String, size: Unit) -> Result<String>;
 
     /// return the hash of the flist used to create the mount `name`
     #[rename("HashFromRootPath")]
-    async fn hash_of_mount(name: String) -> Result<String>;
+    async fn hash_of_mount(&self, name: String) -> Result<String>;
 
     /// exists checks if a mount with that name exists
     #[rename("Exists")]
-    async fn exists(name: String) -> Result<bool>;
+    async fn exists(&self, name: String) -> Result<bool>;
 }
