@@ -1,10 +1,7 @@
-use crate::env;
 use crate::system::{Command, Executor, Syscalls};
 use anyhow::{bail, Result};
 use bytes::buf::Reader;
 use bytes::{Buf, Bytes};
-use nix::libc::mount;
-use reqwest::IntoUrl;
 use std::io::{Error, ErrorKind};
 use std::os::unix::prelude::PermissionsExt;
 use std::path::PathBuf;

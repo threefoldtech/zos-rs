@@ -53,12 +53,22 @@ where
     S: Syscalls,
     E: Executor,
 {
-    fn new<R: Into<PathBuf>>(root: R, syscalls: S, storage: A, executor: E) -> Self
+    fn new<R: Into<PathBuf>>(root: R, syscalls: S, storage: A, executor: E) -> Result<Self>
     where
         R: AsRef<str>,
     {
         let root = Path::new(root.as_ref());
-        Self {
+        fs::create_dir_all(root)?;
+        let permissions = Permissions::from_mode(0o755);
+        fs::set_permissions(root, permissions)?;
+
+        // prepare directory layout for the module
+        for path in vec!["flist", "cache", "mountpoint", "ro", "pid", "log"] {
+            fs::create_dir_all(root.join(path))?;
+            let permissions = Permissions::from_mode(0o755);
+            fs::set_permissions(root, permissions)?;
+        }
+        Ok(Self {
             root: root.into(),
             flist: root.join("flist").into(),
             cache: root.join("cache").into(),
@@ -69,7 +79,7 @@ where
             syscalls,
             storage,
             executor,
-        }
+        })
     }
 
     // MountRO mounts an flist in read-only mode. This mount then can be shared between multiple rw mounts
@@ -191,13 +201,10 @@ where
         let mountpoint = utils::mountpath(&name, &self.mountpoint)?;
 
         match utils::valid(&mountpoint, &self.executor, &self.syscalls).await {
-            Err(error) => {
-                if error.to_string().contains("path is already mounted") {
-                    return Ok(mountpoint);
-                } else {
-                    bail!("validating of mount point failed");
-                }
-            }
+            Err(err) => match err.kind() {
+                ErrorKind::AlreadyExists => return Ok(mountpoint),
+                _ => bail!("failed to validate mountpoint"),
+            },
             _ => {}
         };
         let ro = self.mount_ro(&url, opts.storage.clone()).await?;
@@ -214,19 +221,30 @@ where
         //cleanup unused mounts
     }
 
-    async fn unmount(name: String) -> Result<()> {
+    async fn unmount(&self, name: String) -> Result<()> {
+        let mountpoint = utils::mountpath(&name, &self.mountpoint)?;
+        if let Err(err) = utils::valid(&mountpoint, &self.executor, &self.syscalls).await {
+            match err.kind() {
+                ErrorKind::AlreadyExists => self.syscalls.umount(&mountpoint, None)?,
+                _ => {}
+            }
+        }
+        fs::remove_dir_all(&mountpoint)?;
+        self.storage.delete(&name)?;
+        return Ok(());
+    }
+
+    async fn update(&self, name: String, size: crate::Unit) -> Result<String> {
         unimplemented!()
     }
 
-    async fn update(name: String, size: crate::Unit) -> Result<String> {
+    async fn hash_of_mount(&self, name: String) -> Result<String> {
         unimplemented!()
     }
 
-    async fn hash_of_mount(name: String) -> Result<String> {
-        unimplemented!()
-    }
-
-    async fn exists(name: String) -> Result<bool> {
-        unimplemented!()
+    async fn exists(&self, name: String) -> Result<bool> {
+        let mountpoint = utils::mountpath(name, &self.mountpoint)?;
+        utils::valid(&mountpoint, &self.executor, &self.syscalls).await?;
+        return Ok(true);
     }
 }
