@@ -182,9 +182,6 @@ where
                     // bring up first.
                     down.up().await?
                 }
-                Pool::None => {
-                    unreachable!()
-                }
             };
 
             let usage = up.usage().await?;
@@ -214,4 +211,9 @@ where
         // hence finding, and/or mounting zos-cache
         Ok(())
     }
+}
+
+#[cfg(test)]
+mod test {
+    //fn
 }

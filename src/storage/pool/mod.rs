@@ -2,9 +2,9 @@
 /// uses a single disk device.
 use crate::storage::device::Device;
 use crate::Unit;
+use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
-// define error type?
 
 pub mod btrfs;
 pub use btrfs::BtrfsManager;
@@ -111,9 +111,9 @@ where
     Up(U),
     /// Down pool stat
     Down(D),
-    /// the none value is used as a place holder
-    /// to be used with mem::replace or mem::swap
-    None,
+    // /// the none value is used as a place holder
+    // /// to be used with mem::replace or mem::swap
+    // None,
 }
 
 impl<U, D> Pool<U, D>
@@ -126,7 +126,20 @@ where
         match self {
             Self::Up(up) => up.name(),
             Self::Down(down) => down.name(),
-            Self::None => unimplemented!(), //shouldn't happen
+            //Self::None => unimplemented!(), //shouldn't happen
+        }
+    }
+}
+
+impl<U, D> Display for Pool<U, D>
+where
+    U: UpPool,
+    D: DownPool,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Up(up) => write!(f, "up({})", up.name()),
+            Self::Down(down) => write!(f, "down({})", down.name()),
         }
     }
 }
