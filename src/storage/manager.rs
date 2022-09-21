@@ -215,5 +215,110 @@ where
 
 #[cfg(test)]
 mod test {
-    //fn
+    use crate::storage::pool::*;
+    use crate::Unit;
+    use std::marker::PhantomData;
+    use std::path::{Path, PathBuf};
+
+    struct TestUpPool<C> {
+        pub name: String,
+        pub path: PathBuf,
+        pub usage: Usage,
+        phantom: PhantomData<C>,
+    }
+    struct TestDownPool<C> {
+        pub name: String,
+        pub up: TestUpPool<C>,
+    }
+
+    struct TestVolume {
+        pub id: u64,
+        pub path: PathBuf,
+        pub name: String,
+        pub usage: Usage,
+    }
+
+    #[async_trait::async_trait]
+    impl Volume for TestVolume {
+        /// numeric id of the volume
+        fn id(&self) -> u64 {
+            self.id
+        }
+
+        /// full path to the volume
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        /// name of the volume
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        /// limit, set, update, or remove size limit of the volume
+        async fn limit(&self, size: Option<Unit>) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn usage(&self) -> Result<Usage> {
+            Ok(self.usage.clone())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl<C: Send + Sync> DownPool for TestDownPool<C> {
+        type UpPool = TestUpPool<C>;
+
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        async fn up(self) -> Result<Self::UpPool> {
+            unimplemented!()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl<C: Send + Sync> UpPool for TestUpPool<C> {
+        type DownPool = TestDownPool<C>;
+        type Volume = TestVolume;
+
+        /// path to the mounted pool
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        /// name of the pool
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        /// usage of the pool
+        async fn usage(&self) -> Result<Usage> {
+            Ok(self.usage.clone())
+        }
+
+        /// down bring the pool down and return a DownPool
+        async fn down(self) -> Result<Self::DownPool> {
+            Ok(TestDownPool {
+                name: self.name.clone(),
+                up: self,
+            })
+        }
+
+        /// create a volume
+        async fn volume_create<S: AsRef<str> + Send>(&self, name: S) -> Result<Self::Volume> {
+            unimplemented!()
+        }
+
+        /// list all volumes in the pool
+        async fn volumes(&self) -> Result<Vec<Self::Volume>> {
+            unimplemented!()
+        }
+
+        /// delete volume pools
+        async fn volume_delete<S: AsRef<str> + Send>(&self, name: S) -> Result<()> {
+            unimplemented!()
+        }
+    }
 }
