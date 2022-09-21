@@ -43,7 +43,7 @@ pub struct Usage {
 }
 /// Volume type.
 #[async_trait::async_trait]
-pub trait Volume<'a> {
+pub trait Volume {
     /// numeric id of the volume
     fn id(&self) -> u64;
 
@@ -64,12 +64,12 @@ pub trait Volume<'a> {
 
 /// UpPool is trait for a pool that is hooked to the system and accessible
 #[async_trait::async_trait]
-pub trait UpPool<'a> {
+pub trait UpPool {
     /// DownPool is the type returned by (down) operation
-    type DownPool: DownPool<'a>;
+    type DownPool: DownPool;
 
     /// Volume is associated volume type
-    type Volume: Volume<'a>;
+    type Volume: Volume;
 
     /// path to the mounted pool
     fn path(&self) -> &Path;
@@ -84,18 +84,18 @@ pub trait UpPool<'a> {
     async fn down(self) -> Result<Self::DownPool>;
 
     /// create a volume
-    async fn volume_create<S: AsRef<str> + Send>(&'a self, name: S) -> Result<Self::Volume>;
+    async fn volume_create<S: AsRef<str> + Send>(&self, name: S) -> Result<Self::Volume>;
 
     /// list all volumes in the pool
-    async fn volumes(&'a self) -> Result<Vec<Self::Volume>>;
+    async fn volumes(&self) -> Result<Vec<Self::Volume>>;
 
     /// delete volume pools
     async fn volume_delete<S: AsRef<str> + Send>(&self, name: S) -> Result<()>;
 }
 
 #[async_trait::async_trait]
-pub trait DownPool<'a> {
-    type UpPool: UpPool<'a>;
+pub trait DownPool {
+    type UpPool: UpPool;
 
     async fn up(self) -> Result<Self::UpPool>;
 
@@ -104,8 +104,8 @@ pub trait DownPool<'a> {
 
 pub enum Pool<U, D>
 where
-    U: UpPool<'static>,
-    D: DownPool<'static>,
+    U: UpPool,
+    D: DownPool,
 {
     /// Up pool state
     Up(U),
@@ -118,8 +118,8 @@ where
 
 impl<U, D> Pool<U, D>
 where
-    U: UpPool<'static>,
-    D: DownPool<'static>,
+    U: UpPool,
+    D: DownPool,
 {
     /// return the name of the pool
     pub fn name(&self) -> &str {
@@ -135,8 +135,8 @@ where
 pub trait PoolManager<V, U, D>
 where
     V: Device,
-    U: UpPool<'static>,
-    D: DownPool<'static>,
+    U: UpPool,
+    D: DownPool,
 {
     async fn get(&self, device: V) -> Result<Pool<U, D>>;
 }

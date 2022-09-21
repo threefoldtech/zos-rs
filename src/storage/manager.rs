@@ -16,8 +16,8 @@ const CACHE_TARGET: &str = "/var/cache";
 pub struct Manager<M, P, U, D>
 where
     M: DeviceManager,
-    U: UpPool<'static>,
-    D: DownPool<'static>,
+    U: UpPool,
+    D: DownPool,
     P: PoolManager<M::Device, U, D>,
 {
     device_mgr: M,
@@ -32,8 +32,8 @@ where
 impl<M, P, U, D> Manager<M, P, U, D>
 where
     M: DeviceManager,
-    U: UpPool<'static>,
-    D: DownPool<'static>,
+    U: UpPool<DownPool = D>,
+    D: DownPool<UpPool = U>,
     P: PoolManager<M::Device, U, D>,
 {
     pub async fn new(device_mgr: M, pool_mgr: P) -> Result<Self> {

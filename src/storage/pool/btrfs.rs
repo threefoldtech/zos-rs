@@ -4,6 +4,8 @@ use crate::system::{Command, Executor, Syscalls};
 use crate::Unit;
 use anyhow::Context;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 /// root mount path
 const MNT: &str = "/mnt";
 
@@ -30,26 +32,26 @@ pub async fn dir_size<P: Into<PathBuf>>(root: P) -> std::result::Result<Unit, st
     Ok(size)
 }
 
-pub struct BtrfsVolume<'a, E>
+pub struct BtrfsVolume<E>
 where
     E: Executor,
 {
-    utils: &'a BtrfsUtils<E>,
+    utils: Arc<BtrfsUtils<E>>,
     id: u64,
     path: PathBuf,
 }
 
-impl<'a, E> BtrfsVolume<'a, E>
+impl<E> BtrfsVolume<E>
 where
     E: Executor,
 {
-    fn new(utils: &'a BtrfsUtils<E>, id: u64, path: PathBuf) -> Self {
+    fn new(utils: Arc<BtrfsUtils<E>>, id: u64, path: PathBuf) -> Self {
         Self { utils, id, path }
     }
 }
 
 #[async_trait::async_trait]
-impl<'a, E> Volume<'a> for BtrfsVolume<'a, E>
+impl<E> Volume for BtrfsVolume<E>
 where
     E: Executor + Send + Sync + 'static,
 {
@@ -106,23 +108,23 @@ where
     D: Device,
 {
     sys: S,
-    utils: BtrfsUtils<E>,
+    utils: Arc<BtrfsUtils<E>>,
     device: D,
 }
 
-impl<'a, E, S, D> BtrfsDownPool<E, S, D>
+impl<E, S, D> BtrfsDownPool<E, S, D>
 where
     E: Executor + Send + Sync + 'static,
     S: Syscalls + Send + Sync,
     D: Device + Send + Sync,
 {
-    fn new(utils: BtrfsUtils<E>, sys: S, device: D) -> Self {
+    fn new(utils: Arc<BtrfsUtils<E>>, sys: S, device: D) -> Self {
         Self { utils, sys, device }
     }
 }
 
 #[async_trait::async_trait]
-impl<'a, E, S, D> DownPool<'a> for BtrfsDownPool<E, S, D>
+impl<E, S, D> DownPool for BtrfsDownPool<E, S, D>
 where
     E: Executor + Send + Sync + 'static,
     S: Syscalls + Send + Sync,
@@ -160,7 +162,7 @@ where
     S: Syscalls,
     D: Device,
 {
-    utils: BtrfsUtils<E>,
+    utils: Arc<BtrfsUtils<E>>,
     sys: S,
     device: D,
     path: PathBuf,
@@ -172,7 +174,7 @@ where
     S: Syscalls + Send + Sync,
     D: Device + Send + Sync,
 {
-    fn new(utils: BtrfsUtils<E>, sys: S, path: PathBuf, device: D) -> Self {
+    fn new(utils: Arc<BtrfsUtils<E>>, sys: S, path: PathBuf, device: D) -> Self {
         Self {
             utils,
             sys,
@@ -183,13 +185,13 @@ where
 }
 
 #[async_trait::async_trait]
-impl<'a, E, S, D> UpPool<'a> for BtrfsUpPool<E, S, D>
+impl<E, S, D> UpPool for BtrfsUpPool<E, S, D>
 where
     E: Executor + Send + Sync + 'static,
     S: Syscalls + Send + Sync,
     D: Device + Send + Sync,
 {
-    type Volume = BtrfsVolume<'a, E>;
+    type Volume = BtrfsVolume<E>;
     type DownPool = BtrfsDownPool<E, S, D>;
 
     fn path(&self) -> &Path {
@@ -225,21 +227,27 @@ where
         Ok(BtrfsDownPool::new(self.utils, self.sys, self.device))
     }
 
-    async fn volumes(&'a self) -> Result<Vec<Self::Volume>> {
+    async fn volumes(&self) -> Result<Vec<Self::Volume>> {
         Ok(self
             .utils
             .volume_list(&self.path)
             .await?
             .into_iter()
-            .map(|m| BtrfsVolume::new(&self.utils, m.id, Path::new(&self.path).join(m.name)))
+            .map(|m| {
+                BtrfsVolume::new(
+                    Arc::clone(&self.utils),
+                    m.id,
+                    Path::new(&self.path).join(m.name),
+                )
+            })
             .collect())
     }
 
-    async fn volume_create<N: AsRef<str> + Send>(&'a self, name: N) -> Result<Self::Volume> {
+    async fn volume_create<N: AsRef<str> + Send>(&self, name: N) -> Result<Self::Volume> {
         let name = name.as_ref();
         let path = self.utils.volume_create(&self.path, name).await?;
         let id = self.utils.volume_id(&self.path, name).await?;
-        Ok(BtrfsVolume::new(&self.utils, id, path))
+        Ok(BtrfsVolume::new(Arc::clone(&self.utils), id, path))
     }
 
     async fn volume_delete<N: AsRef<str> + Send>(&self, name: N) -> Result<()> {
@@ -279,7 +287,7 @@ where
             .filter(|m| matches!(m.option("subvol"), Some(Some(v)) if v == "/"))
             .next();
 
-        let utils = BtrfsUtils::new(exec);
+        let utils = Arc::new(BtrfsUtils::new(exec));
         match mnt {
             Some(mnt) => Ok(BtrfsPool::Up(BtrfsUpPool::new(
                 utils, sys, mnt.target, device,
