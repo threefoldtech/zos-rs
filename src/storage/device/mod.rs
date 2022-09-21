@@ -8,7 +8,7 @@ use std::str::FromStr;
 pub mod lsblk;
 pub use lsblk::{LsBlk, LsblkDevice};
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub enum DeviceType {
     #[serde(alias = "hdd")]
     HDD,
@@ -37,8 +37,17 @@ impl FromStr for DeviceType {
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum Filesystem {
     Btrfs,
+}
+
+impl Display for Filesystem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Btrfs => write!(f, "btrfs"),
+        }
+    }
 }
 
 pub trait Device {
@@ -76,4 +85,88 @@ pub trait DeviceManager {
         filesystem: Filesystem,
         force: bool,
     ) -> Result<Self::Device>;
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::Unit;
+    use std::path::PathBuf;
+
+    #[derive(Clone)]
+    pub struct TestDevice {
+        pub path: PathBuf,
+        pub size: Unit,
+        pub filesystem: Option<String>,
+        pub label: Option<String>,
+        pub device_type: DeviceType,
+    }
+
+    impl Device for TestDevice {
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn size(&self) -> Unit {
+            self.size
+        }
+
+        fn subsystems(&self) -> &str {
+            "device:test"
+        }
+
+        fn label(&self) -> Option<&str> {
+            self.label.as_ref().map(|s| s.as_str())
+        }
+
+        fn filesystem(&self) -> Option<&str> {
+            self.filesystem.as_ref().map(|f| f.as_str())
+        }
+
+        fn rota(&self) -> bool {
+            false
+        }
+    }
+
+    pub struct TestManager {
+        pub devices: Vec<TestDevice>,
+    }
+
+    #[async_trait::async_trait]
+    impl DeviceManager for TestManager {
+        type Device = TestDevice;
+
+        async fn devices(&self) -> Result<Vec<Self::Device>> {
+            Ok(self.devices.clone())
+        }
+
+        async fn device<P: AsRef<Path> + Send>(&self, _path: P) -> Result<Self::Device> {
+            unimplemented!()
+        }
+
+        async fn labeled<S: AsRef<str> + Send>(&self, _label: S) -> Result<Self::Device> {
+            unimplemented!()
+        }
+
+        async fn shutdown(&self, _device: &Self::Device) -> Result<()> {
+            unimplemented!()
+        }
+
+        async fn seektime(&self, device: &Self::Device) -> Result<DeviceType> {
+            Ok(device.device_type.clone())
+        }
+
+        async fn format(
+            &self,
+            mut device: Self::Device,
+            filesystem: Filesystem,
+            _force: bool,
+        ) -> Result<Self::Device> {
+            //todo: handle force
+            device.filesystem = Some(filesystem.to_string());
+            device.label = Some(uuid::Uuid::new_v4().hyphenated().to_string());
+
+            Ok(device)
+        }
+    }
 }
