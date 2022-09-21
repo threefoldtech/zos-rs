@@ -34,9 +34,9 @@ pub enum Error {
     Other(#[from] anyhow::Error),
 }
 
-type Result<T> = anyhow::Result<T, Error>;
+pub type Result<T> = anyhow::Result<T, Error>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Usage {
     pub size: Unit,
     pub used: Unit,
