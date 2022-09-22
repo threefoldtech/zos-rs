@@ -234,8 +234,11 @@ where
         return Ok(());
     }
 
-    async fn update(&self, name: String, size: crate::Unit) -> Result<String> {
-        unimplemented!()
+    async fn update(&self, name: String, size: crate::Unit) -> Result<PathBuf> {
+        let mountpoint = utils::mountpath(&name, &self.mountpoint)?;
+        utils::is_mountpoint(&mountpoint, &self.executor).await?;
+        self.storage.update(&name, size)?;
+        Ok(mountpoint)
     }
 
     async fn hash_of_mount(&self, name: String) -> Result<String> {

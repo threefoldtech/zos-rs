@@ -96,7 +96,7 @@ pub trait Flist {
 
     // UpdateMountSize change the mount size
     #[rename("UpdateMountSize")]
-    async fn update(&self, name: String, size: Unit) -> Result<String>;
+    async fn update(&self, name: String, size: Unit) -> Result<PathBuf>;
 
     /// return the hash of the flist used to create the mount `name`
     #[rename("HashFromRootPath")]

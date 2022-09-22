@@ -96,8 +96,8 @@ pub fn mountpath<S: AsRef<str>, P: AsRef<Path>>(name: S, mountpoint_path: P) -> 
     Ok(mountpath)
 }
 
-pub fn flist_mount_path<P: AsRef<Path>>(hash: &str, ro_path: P) -> Result<PathBuf> {
-    let mountpath = ro_path.as_ref().join(hash);
+pub fn flist_mount_path<P: AsRef<Path>, S: AsRef<str>>(hash: S, ro_path: P) -> Result<PathBuf> {
+    let mountpath = ro_path.as_ref().join(hash.as_ref());
     if mountpath.parent() != Some(ro_path.as_ref()) {
         bail!("invalid mount name")
     }
