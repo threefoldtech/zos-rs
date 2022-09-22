@@ -91,7 +91,7 @@ impl From<&Command> for TokioCommand {
     }
 }
 
-#[mockall::automock]
+#[cfg_attr(test, mockall::automock)]
 #[async_trait::async_trait]
 pub trait Executor {
     /// run runs a short lived command, and return it's output.
