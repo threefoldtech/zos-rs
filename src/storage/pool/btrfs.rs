@@ -153,6 +153,7 @@ where
             Option::<&str>::None,
         )?;
 
+        self.utils.qgroup_enable(&path).await?;
         Ok(BtrfsUpPool::new(self.utils, self.sys, path, self.device))
     }
 }
@@ -327,15 +328,6 @@ where
     M: DeviceManager + Send + Sync + 'static,
 {
     async fn get(&self, manager: &M, device: M::Device) -> Result<BtrfsPool<E, S, M::Device>> {
-        let path = device
-            .path()
-            .to_str()
-            .ok_or_else(|| Error::InvalidDevice {
-                device: device.path().into(),
-                reason: InvalidDevice::InvalidPath,
-            })?
-            .to_owned(); // we own it to drop the reference so we can prepare the device
-
         let device = match device.filesystem() {
             None => manager
                 .format(device, Filesystem::Btrfs, false)
@@ -654,6 +646,11 @@ mod test {
             .arg("--raw")
             .arg("/mnt/test-device/zos-cache");
 
+        let quota = Command::new("btrfs")
+            .arg("quota")
+            .arg("enable")
+            .arg("/mnt/test-device");
+
         exec.expect_run()
             .withf(move |arg: &Command| arg == &list)
             .returning(|_| Ok(Vec::from(VOLS)));
@@ -661,6 +658,10 @@ mod test {
         exec.expect_run()
             .withf(move |arg: &Command| arg == &groups)
             .returning(|_| Ok(Vec::from(GROUPS)));
+
+        exec.expect_run()
+            .withf(move |arg: &Command| arg == &quota)
+            .returning(|_| Ok(Vec::default()));
 
         let pool = BtrfsPool::with(exec, MockSyscalls, device).await.unwrap();
         // because device is NOT (and will never be) mounted. it means pool returned in the mock is always in Down state
