@@ -1,6 +1,5 @@
 /// a pool is a wrapper around a disk device. right now a single pool
 /// uses a single disk device.
-use crate::storage::device::Device;
 use crate::Unit;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
@@ -9,14 +8,34 @@ use thiserror::Error;
 pub mod btrfs;
 pub use btrfs::BtrfsManager;
 
+use super::device::DeviceManager;
+
+#[derive(Debug)]
+pub enum InvalidDevice {
+    InvalidPath,
+    InvalidLabel,
+}
+
+impl Display for InvalidDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidPath => write!(f, "invalid path"),
+            Self::InvalidLabel => write!(f, "invalid label"),
+        }
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("volume not found {volume}")]
     VolumeNotFound { volume: String },
     #[error("pool not found {pool}")]
     PoolNotFound { pool: String },
-    #[error("invalid device {device}")]
-    InvalidDevice { device: PathBuf },
+    #[error("invalid device {device}: {reason}")]
+    InvalidDevice {
+        device: PathBuf,
+        reason: InvalidDevice,
+    },
     #[error("invalid filesystem on device {device}")]
     InvalidFilesystem { device: PathBuf },
     #[error("invalid volume {volume}")]
@@ -145,11 +164,11 @@ where
 }
 
 #[async_trait::async_trait]
-pub trait PoolManager<V, U, D>
+pub trait PoolManager<M, U, D>
 where
-    V: Device,
+    M: DeviceManager,
     U: UpPool,
     D: DownPool,
 {
-    async fn get(&self, device: V) -> Result<Pool<U, D>>;
+    async fn get(&self, manager: &M, device: M::Device) -> Result<Pool<U, D>>;
 }

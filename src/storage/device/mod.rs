@@ -88,7 +88,7 @@ pub trait DeviceManager {
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
     use crate::Unit;
     use std::path::PathBuf;

@@ -18,7 +18,7 @@ where
     M: DeviceManager,
     U: UpPool,
     D: DownPool,
-    P: PoolManager<M::Device, U, D>,
+    P: PoolManager<M, U, D>,
 {
     device_mgr: M,
     pool_mgr: P,
@@ -32,9 +32,9 @@ where
 impl<M, P, U, D> Manager<M, P, U, D>
 where
     M: DeviceManager,
+    P: PoolManager<M, U, D>,
     U: UpPool<DownPool = D>,
     D: DownPool<UpPool = U>,
-    P: PoolManager<M::Device, U, D>,
 {
     pub async fn new(device_mgr: M, pool_mgr: P) -> Result<Self> {
         let mut this = Self {
@@ -55,10 +55,6 @@ where
         Ok(this)
     }
 
-    fn is_formatted(&self, device: &M::Device) -> bool {
-        return matches!(device.filesystem(), Some(f) if f == "btrfs") && device.label().is_some();
-    }
-
     async fn get_type(&self, device: &M::Device) -> Result<DeviceType> {
         // first check cache
         let name = match device.path().file_name() {
@@ -77,21 +73,6 @@ where
         })?;
 
         Ok(t)
-    }
-
-    async fn prepare(&self, device: M::Device) -> Result<M::Device> {
-        if self.is_formatted(&device) {
-            Ok(device)
-        } else if FORCE_FORMAT {
-            self.device_mgr
-                .format(device, Filesystem::Btrfs, FORCE_FORMAT)
-                .await
-        } else {
-            anyhow::bail!(
-                "device {:?} has a different filesystem, skipped",
-                device.path()
-            );
-        }
     }
 
     // search all ssd storage for a volume with given name
@@ -146,14 +127,6 @@ where
     async fn initialize(&mut self) -> Result<()> {
         let devices = self.device_mgr.devices().await?;
         for device in devices {
-            let device = match self.prepare(device).await {
-                Ok(device) => device,
-                Err(err) => {
-                    log::error!("failed to prepare device duo to: {}", err);
-                    continue;
-                }
-            };
-
             let device_typ = match self.get_type(&device).await {
                 Ok(typ) => typ,
                 Err(err) => {
@@ -166,7 +139,7 @@ where
                 }
             };
 
-            let pool = match self.pool_mgr.get(device).await {
+            let pool = match self.pool_mgr.get(&self.device_mgr, device).await {
                 Ok(pool) => pool,
                 Err(err) => {
                     log::error!("failed to initialize pool for device: {}", err);
@@ -215,20 +188,21 @@ where
 
 #[cfg(test)]
 mod test {
+
+    use super::Manager;
+    use crate::storage::device::{Device, DeviceManager};
     use crate::storage::pool::*;
     use crate::Unit;
-    use std::marker::PhantomData;
     use std::path::{Path, PathBuf};
 
-    struct TestUpPool<C> {
+    struct TestUpPool {
         pub name: String,
         pub path: PathBuf,
         pub usage: Usage,
-        phantom: PhantomData<C>,
     }
-    struct TestDownPool<C> {
+    struct TestDownPool {
         pub name: String,
-        pub up: TestUpPool<C>,
+        pub up: TestUpPool,
     }
 
     struct TestVolume {
@@ -266,21 +240,21 @@ mod test {
     }
 
     #[async_trait::async_trait]
-    impl<C: Send + Sync> DownPool for TestDownPool<C> {
-        type UpPool = TestUpPool<C>;
+    impl DownPool for TestDownPool {
+        type UpPool = TestUpPool;
 
         fn name(&self) -> &str {
             &self.name
         }
 
         async fn up(self) -> Result<Self::UpPool> {
-            unimplemented!()
+            Ok(self.up)
         }
     }
 
     #[async_trait::async_trait]
-    impl<C: Send + Sync> UpPool for TestUpPool<C> {
-        type DownPool = TestDownPool<C>;
+    impl UpPool for TestUpPool {
+        type DownPool = TestDownPool;
         type Volume = TestVolume;
 
         /// path to the mounted pool
@@ -313,12 +287,62 @@ mod test {
 
         /// list all volumes in the pool
         async fn volumes(&self) -> Result<Vec<Self::Volume>> {
-            unimplemented!()
+            Ok(vec![])
         }
 
         /// delete volume pools
         async fn volume_delete<S: AsRef<str> + Send>(&self, name: S) -> Result<()> {
             unimplemented!()
         }
+    }
+
+    struct TestPoolManager;
+    #[async_trait::async_trait]
+    impl<M> PoolManager<M, TestUpPool, TestDownPool> for TestPoolManager
+    where
+        M: DeviceManager + Send + Sync + 'static,
+    {
+        async fn get(
+            &self,
+            _manager: &M,
+            device: M::Device,
+        ) -> Result<Pool<TestUpPool, TestDownPool>> {
+            let name: String = device.path().file_name().unwrap().to_str().unwrap().into();
+            Ok(Pool::Down(TestDownPool {
+                name: name.clone(),
+                up: TestUpPool {
+                    name: name.clone(),
+                    path: device.path().join(name),
+                    usage: Usage {
+                        size: device.size(),
+                        used: 0,
+                    },
+                },
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn initialize() {
+        use crate::storage::device::test::*;
+        use crate::storage::device::DeviceType;
+        simple_logger::init_utc().unwrap();
+
+        let blk = TestManager {
+            devices: vec![TestDevice {
+                path: PathBuf::from("/dev/test1"),
+                device_type: DeviceType::SSD,
+                filesystem: None,
+                label: None,
+                size: 1 * crate::TERABYTE,
+            }],
+        };
+
+        let mgr = Manager::new(blk, TestPoolManager)
+            .await
+            .expect("manager failed to create");
+
+        assert_eq!(mgr.ssds.len(), 1);
+        assert_eq!(mgr.ssd_size, 1 * crate::TERABYTE);
     }
 }
