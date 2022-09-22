@@ -65,7 +65,7 @@ pub trait Device {
 }
 
 #[async_trait::async_trait]
-pub trait DeviceManager {
+pub trait DeviceManager: Send + Sync {
     type Device: Device + Send + Sync;
 
     /// list all devices

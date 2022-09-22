@@ -1,24 +1,26 @@
+use super::pool;
+use super::Result;
+use super::VolumeInfo;
 use crate::cache::Store;
 use crate::storage::device::{DeviceManager, DeviceType};
 use crate::storage::pool::{DownPool, UpPool, Volume};
-use crate::system::{MsFlags, Syscalls, System};
 use crate::Unit;
-use anyhow::{Context, Result};
+use anyhow::Context;
 use std::collections::HashMap;
 
-use super::device::{Device, Filesystem};
+use super::device::Device;
 use super::pool::{Pool, PoolManager};
 
 const FORCE_FORMAT: bool = false;
 const CACHE_VOLUME: &str = "zos-cache";
 const CACHE_TARGET: &str = "/var/cache";
 
-pub struct Manager<M, P, U, D>
+pub struct StorageManager<M, P, U, D>
 where
     M: DeviceManager,
+    P: PoolManager<M, U, D>,
     U: UpPool,
     D: DownPool,
-    P: PoolManager<M, U, D>,
 {
     device_mgr: M,
     pool_mgr: P,
@@ -29,7 +31,7 @@ where
     hdd_size: Unit,
 }
 
-impl<M, P, U, D> Manager<M, P, U, D>
+impl<M, P, U, D> StorageManager<M, P, U, D>
 where
     M: DeviceManager,
     P: PoolManager<M, U, D>,
@@ -59,7 +61,13 @@ where
         // first check cache
         let name = match device.path().file_name() {
             Some(name) => name,
-            None => anyhow::bail!("invalid device path {:?}", device.path()),
+            None => {
+                return Err(pool::Error::InvalidDevice {
+                    device: device.path().into(),
+                    reason: pool::InvalidDevice::InvalidPath,
+                }
+                .into())
+            }
         };
 
         if let Some(t) = self.cache.get(name).await? {
@@ -75,54 +83,30 @@ where
         Ok(t)
     }
 
-    // search all ssd storage for a volume with given name
-    async fn find_volume<S: AsRef<str>>(&self, name: S) -> Result<Option<impl Volume>> {
-        // search mounted pool first
-        for (_, pool) in self.ssds.iter() {
-            let up = match pool {
-                Pool::Up(ref up) => up,
-                _ => continue,
-            };
+    // async fn ensure_cache(&self) -> Result<()> {
+    //     let mnt = super::mountpoint(CACHE_TARGET)
+    //         .await
+    //         .context("failed to check mount for cache")?;
 
-            let vol = up
-                .volumes()
-                .await?
-                .into_iter()
-                .filter(|v| v.name() == name.as_ref())
-                .next();
+    //     if mnt.is_some() {
+    //         return Ok(());
+    //     }
 
-            if let Some(vol) = vol {
-                return Ok(Some(vol));
-            }
-        }
+    //     let vol = match self.find_volume(CACHE_VOLUME).await? {
+    //         Some(vol) => vol,
+    //         None => unimplemented!(), // create a volume
+    //     };
 
-        Ok(None)
-    }
+    //     System.mount(
+    //         Some(vol.path()),
+    //         CACHE_TARGET,
+    //         Option::<&str>::None,
+    //         MsFlags::MS_BIND,
+    //         Option::<&str>::None,
+    //     )?;
 
-    async fn ensure_cache(&self) -> Result<()> {
-        let mnt = super::mountpoint(CACHE_TARGET)
-            .await
-            .context("failed to check mount for cache")?;
-
-        if mnt.is_some() {
-            return Ok(());
-        }
-
-        let vol = match self.find_volume(CACHE_VOLUME).await? {
-            Some(vol) => vol,
-            None => unimplemented!(), // create a volume
-        };
-
-        System.mount(
-            Some(vol.path()),
-            CACHE_TARGET,
-            Option::<&str>::None,
-            MsFlags::MS_BIND,
-            Option::<&str>::None,
-        )?;
-
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
     async fn initialize(&mut self) -> Result<()> {
         let devices = self.device_mgr.devices().await?;
@@ -186,10 +170,58 @@ where
     }
 }
 
+#[async_trait::async_trait]
+impl<M, P, U, D> super::Manager for StorageManager<M, P, U, D>
+where
+    M: DeviceManager,
+    P: PoolManager<M, U, D>,
+    U: UpPool,
+    D: DownPool,
+{
+    async fn volume_lookup<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<VolumeInfo> {
+        for (_, pool) in self.ssds.iter() {
+            let up = match pool {
+                Pool::Up(ref up) => up,
+                _ => continue,
+            };
+
+            let vol = up
+                .volumes()
+                .await?
+                .into_iter()
+                .filter(|v| v.name() == name.as_ref())
+                .next();
+
+            if let Some(vol) = vol {
+                return Ok((&vol).into());
+            }
+        }
+
+        Err(super::Error::NotFound {
+            id: name.as_ref().into(),
+            kind: super::Kind::Volume,
+        })
+    }
+
+    async fn volumes(&self) -> Result<Vec<VolumeInfo>> {
+        let mut volumes = vec![];
+        for (_, pool) in self.ssds.iter() {
+            let up = match pool {
+                Pool::Up(ref up) => up,
+                _ => continue,
+            };
+
+            volumes.extend(up.volumes().await?.iter().map(|v| VolumeInfo::from(v)));
+        }
+
+        Ok(volumes)
+    }
+}
+
 #[cfg(test)]
 mod test {
 
-    use super::Manager;
+    use super::StorageManager;
     use crate::storage::device::{Device, DeviceManager};
     use crate::storage::pool::*;
     use crate::Unit;
@@ -338,7 +370,7 @@ mod test {
             }],
         };
 
-        let mgr = Manager::new(blk, TestPoolManager)
+        let mgr = StorageManager::new(blk, TestPoolManager)
             .await
             .expect("manager failed to create");
 

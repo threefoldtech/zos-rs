@@ -5,10 +5,11 @@ use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+use super::device::DeviceManager;
+pub use crate::storage::Usage;
+
 pub mod btrfs;
 pub use btrfs::BtrfsManager;
-
-use super::device::DeviceManager;
 
 #[derive(Debug)]
 pub enum InvalidDevice {
@@ -55,14 +56,9 @@ pub enum Error {
 
 pub type Result<T> = anyhow::Result<T, Error>;
 
-#[derive(Debug, Clone)]
-pub struct Usage {
-    pub size: Unit,
-    pub used: Unit,
-}
 /// Volume type.
 #[async_trait::async_trait]
-pub trait Volume {
+pub trait Volume: Send + Sync {
     /// numeric id of the volume
     fn id(&self) -> u64;
 
@@ -83,7 +79,7 @@ pub trait Volume {
 
 /// UpPool is trait for a pool that is hooked to the system and accessible
 #[async_trait::async_trait]
-pub trait UpPool {
+pub trait UpPool: Send + Sync {
     /// DownPool is the type returned by (down) operation
     type DownPool: DownPool;
 
@@ -113,7 +109,7 @@ pub trait UpPool {
 }
 
 #[async_trait::async_trait]
-pub trait DownPool {
+pub trait DownPool: Send + Sync {
     type UpPool: UpPool;
 
     async fn up(self) -> Result<Self::UpPool>;
@@ -164,7 +160,7 @@ where
 }
 
 #[async_trait::async_trait]
-pub trait PoolManager<M, U, D>
+pub trait PoolManager<M, U, D>: Send + Sync
 where
     M: DeviceManager,
     U: UpPool,
