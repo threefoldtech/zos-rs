@@ -1,4 +1,3 @@
-mod mgr;
 /// implementation of the flist daemon
 mod utils;
 mod volume_allocator;
