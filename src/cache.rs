@@ -42,11 +42,22 @@ pub struct Store<T> {
 }
 
 impl<T> Store<T> {
+    #[cfg(not(test))]
     pub async fn new<S: AsRef<str>>(name: S, size: Unit) -> Result<Self> {
         let path = volatile(name, size).await?;
 
         Ok(Store {
             path: path,
+            phantom: PhantomData::default(),
+        })
+    }
+
+    #[cfg(test)]
+    pub async fn new<S: AsRef<str>>(name: S, _size: Unit) -> Result<Self> {
+        let path = std::env::temp_dir().join(name.as_ref());
+        tokio::fs::create_dir_all(&path).await?;
+        Ok(Store {
+            path,
             phantom: PhantomData::default(),
         })
     }

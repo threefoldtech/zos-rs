@@ -1,5 +1,5 @@
-use super::{DownPool, Error, Pool, PoolManager, Result, UpPool, Usage, Volume};
-use crate::storage::device::Device;
+use super::{DownPool, Error, InvalidDevice, Pool, PoolManager, Result, UpPool, Usage, Volume};
+use crate::storage::device::{Device, DeviceManager, Filesystem};
 use crate::system::{Command, Executor, Syscalls};
 use crate::Unit;
 use anyhow::Context;
@@ -142,6 +142,7 @@ where
         let path =
             Path::new(MNT).join(self.device.label().ok_or_else(|| Error::InvalidDevice {
                 device: self.device.path().into(),
+                reason: InvalidDevice::InvalidLabel,
             })?);
 
         self.sys.mount(
@@ -272,6 +273,7 @@ where
     async fn with(exec: E, sys: S, device: D) -> Result<Self> {
         let path = device.path().to_str().ok_or_else(|| Error::InvalidDevice {
             device: device.path().into(),
+            reason: InvalidDevice::InvalidPath,
         })?;
 
         // todo!: create btrfs filesystem and also enable quota
@@ -317,13 +319,46 @@ where
 }
 
 #[async_trait::async_trait]
-impl<E, S, V> PoolManager<V, BtrfsUpPool<E, S, V>, BtrfsDownPool<E, S, V>> for BtrfsManager<E, S>
+impl<E, S, M> PoolManager<M, BtrfsUpPool<E, S, M::Device>, BtrfsDownPool<E, S, M::Device>>
+    for BtrfsManager<E, S>
 where
     E: Executor + Clone + Send + Sync + 'static,
     S: Syscalls + Clone + Send + Sync,
-    V: Device + Send + Sync + 'static,
+    M: DeviceManager + Send + Sync + 'static,
 {
-    async fn get(&self, device: V) -> Result<BtrfsPool<E, S, V>> {
+    async fn get(&self, manager: &M, device: M::Device) -> Result<BtrfsPool<E, S, M::Device>> {
+        let path = device
+            .path()
+            .to_str()
+            .ok_or_else(|| Error::InvalidDevice {
+                device: device.path().into(),
+                reason: InvalidDevice::InvalidPath,
+            })?
+            .to_owned(); // we own it to drop the reference so we can prepare the device
+
+        let device = match device.filesystem() {
+            None => manager
+                .format(device, Filesystem::Btrfs, false)
+                .await
+                .context("failed to prepare filesystem")?,
+            Some(fs) if fs == "btrfs" => {
+                if device.label().is_some() {
+                    device
+                } else {
+                    // has btrfs but no label! that's an unknown state,
+                    return Err(Error::InvalidDevice {
+                        device: device.path().into(),
+                        reason: InvalidDevice::InvalidLabel,
+                    });
+                }
+            }
+            _ => {
+                return Err(Error::InvalidFilesystem {
+                    device: device.path().into(),
+                })
+            }
+        };
+
         BtrfsPool::with(self.exec.clone(), self.sys.clone(), device).await
     }
 }
@@ -528,11 +563,11 @@ impl Default for BtrfsUtils<crate::system::System> {
 
 #[cfg(test)]
 mod test {
-
     use super::{BtrfsPool, BtrfsUtils, DownPool, Pool, UpPool, Volume};
     use crate::storage::device::Device;
     use crate::system::{Command, Syscalls};
     use crate::Unit;
+    use anyhow::Result;
     use std::path::{Path, PathBuf};
 
     // mock syscall always succeed
