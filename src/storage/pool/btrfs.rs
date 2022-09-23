@@ -816,6 +816,33 @@ ID 7438 gen 33152049 top level 5 path rootfs:647-10988-vm
     }
 
     #[tokio::test]
+    async fn utils_volume_create_exists() {
+        use crate::storage::pool::Error;
+        use crate::system::Error as ExecError;
+
+        let exec = crate::system::MockExecutor::default();
+        let mut utils = BtrfsUtils::new(exec);
+        let cmd = Command::new("btrfs")
+            .arg("subvolume")
+            .arg("create")
+            .arg("/mnt/pool/test");
+        utils
+            .exec
+            .expect_run()
+            .withf(move |arg: &Command| arg == &cmd)
+            .returning(|_| {
+                Err(ExecError::Exit {
+                    code: 1,
+                    stderr: "ERROR: target path already exists:".into(),
+                })
+            });
+
+        let vol = utils.volume_create("/mnt/pool", "test").await;
+        utils.exec.checkpoint();
+        assert!(matches!(vol, Err(Error::VolumeAlreadyExists { volume }) if volume == "test"))
+    }
+
+    #[tokio::test]
     async fn utils_volume_delete() {
         let exec = crate::system::MockExecutor::default();
         let mut utils = BtrfsUtils::new(exec);
@@ -865,6 +892,33 @@ ID 7438 gen 33152049 top level 5 path rootfs:647-10988-vm
         let vol = utils.volume_id("/mnt/pool", "test").await.unwrap();
         utils.exec.checkpoint();
         assert_eq!(vol, 1740);
+    }
+
+    #[tokio::test]
+    async fn utils_volume_id_not_exists() {
+        use crate::storage::pool::Error;
+        use crate::system::Error as ExecError;
+
+        let exec = crate::system::MockExecutor::default();
+        let mut utils = BtrfsUtils::new(exec);
+        let cmd = Command::new("btrfs")
+            .arg("subvolume")
+            .arg("show")
+            .arg("/mnt/pool/test");
+        utils
+            .exec
+            .expect_run()
+            .withf(move |arg: &Command| arg == &cmd)
+            .returning(|_| {
+                Err(ExecError::Exit {
+                    code: 1,
+                    stderr: "something something No such file or directory".into(),
+                })
+            });
+
+        let vol = utils.volume_id("/mnt/pool", "test").await;
+        utils.exec.checkpoint();
+        assert!(matches!(vol, Err(Error::VolumeNotFound { volume }) if volume == "test"))
     }
 
     #[tokio::test]
