@@ -30,6 +30,8 @@ impl Display for InvalidDevice {
 pub enum Error {
     #[error("volume not found {volume}")]
     VolumeNotFound { volume: String },
+    #[error("volume {volume} already exists")]
+    VolumeAlreadyExists { volume: String },
     #[error("pool not found {pool}")]
     PoolNotFound { pool: String },
     #[error("invalid device {device}: {reason}")]
@@ -117,6 +119,13 @@ pub trait DownPool: Send + Sync {
     fn name(&self) -> &str;
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum State {
+    Up,
+    Down,
+}
+
+#[derive(Clone)]
 pub enum Pool<U, D>
 where
     U: UpPool,
@@ -142,6 +151,13 @@ where
             Self::Up(up) => up.name(),
             Self::Down(down) => down.name(),
             //Self::None => unimplemented!(), //shouldn't happen
+        }
+    }
+
+    pub fn state(&self) -> State {
+        match self {
+            Self::Up(_) => State::Up,
+            Self::Down(_) => State::Down,
         }
     }
 }

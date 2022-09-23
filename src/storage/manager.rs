@@ -225,18 +225,26 @@ mod test {
     use crate::storage::device::{Device, DeviceManager};
     use crate::storage::pool::*;
     use crate::Unit;
+    use std::collections::HashMap;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
+    #[derive(Clone)]
     struct TestUpPool {
         pub name: String,
         pub path: PathBuf,
         pub usage: Usage,
+        pub volumes: Arc<Mutex<Vec<TestVolume>>>,
     }
+
+    #[derive(Clone)]
     struct TestDownPool {
         pub name: String,
         pub up: TestUpPool,
     }
 
+    #[derive(Clone, Default)]
     struct TestVolume {
         pub id: u64,
         pub path: PathBuf,
@@ -314,12 +322,31 @@ mod test {
 
         /// create a volume
         async fn volume_create<S: AsRef<str> + Send>(&self, name: S) -> Result<Self::Volume> {
-            unimplemented!()
+            let name = name.as_ref();
+            let mut vols = self.volumes.lock().await;
+            for vol in vols.iter() {
+                if vol.name() == name {
+                    return Err(Error::VolumeAlreadyExists {
+                        volume: name.into(),
+                    });
+                }
+            }
+            let vol = TestVolume {
+                id: (vols.len() + 1) as u64,
+                name: name.into(),
+                path: self.path.join(name),
+                ..Default::default()
+            };
+
+            vols.push(vol.clone());
+            // other wise just create
+            Ok(vol)
         }
 
         /// list all volumes in the pool
         async fn volumes(&self) -> Result<Vec<Self::Volume>> {
-            Ok(vec![])
+            let v = self.volumes.lock().await;
+            Ok(v.clone())
         }
 
         /// delete volume pools
@@ -328,7 +355,11 @@ mod test {
         }
     }
 
-    struct TestPoolManager;
+    #[derive(Default)]
+    struct TestPoolManager {
+        pub map: HashMap<PathBuf, Pool<TestUpPool, TestDownPool>>,
+    }
+
     #[async_trait::async_trait]
     impl<M> PoolManager<M, TestUpPool, TestDownPool> for TestPoolManager
     where
@@ -339,18 +370,10 @@ mod test {
             _manager: &M,
             device: M::Device,
         ) -> Result<Pool<TestUpPool, TestDownPool>> {
-            let name: String = device.path().file_name().unwrap().to_str().unwrap().into();
-            Ok(Pool::Down(TestDownPool {
-                name: name.clone(),
-                up: TestUpPool {
-                    name: name.clone(),
-                    path: device.path().join(name),
-                    usage: Usage {
-                        size: device.size(),
-                        used: 0,
-                    },
-                },
-            }))
+            //this should use the label, not the path.
+            let pool = self.map.get(device.path()).unwrap();
+
+            Ok(pool.clone())
         }
     }
 
@@ -360,21 +383,83 @@ mod test {
         use crate::storage::device::DeviceType;
         simple_logger::init_utc().unwrap();
 
+        let p1_dev: PathBuf = "/dev/test1".into();
+        let p1_label: String = "pool-1".into();
+
+        let p2_dev: PathBuf = "/dev/test2".into();
+        let p2_label: String = "pool-2".into();
+
         let blk = TestManager {
-            devices: vec![TestDevice {
-                path: PathBuf::from("/dev/test1"),
-                device_type: DeviceType::SSD,
-                filesystem: None,
-                label: None,
-                size: 1 * crate::TERABYTE,
-            }],
+            devices: vec![
+                TestDevice {
+                    path: p1_dev.clone(),
+                    device_type: DeviceType::SSD,
+                    filesystem: Some("test".into()),
+                    label: Some(p1_label.clone()),
+                    size: 1 * crate::TERABYTE,
+                },
+                TestDevice {
+                    path: p2_dev.clone(),
+                    device_type: DeviceType::SSD,
+                    filesystem: Some("test".into()),
+                    label: Some(p2_label.clone()),
+                    size: 1 * crate::TERABYTE,
+                },
+            ],
         };
 
-        let mgr = StorageManager::new(blk, TestPoolManager)
+        // map devices to pools
+        let mut pool_manager = TestPoolManager::default();
+        pool_manager.map.insert(
+            p1_dev.clone(),
+            Pool::Down(TestDownPool {
+                name: p1_label.clone(),
+                up: TestUpPool {
+                    name: p1_label.clone(),
+                    path: Path::new("/mnt").join(p1_label),
+                    usage: Usage {
+                        size: 1 * crate::TERABYTE,
+                        used: 0,
+                    },
+                    volumes: Arc::default(),
+                },
+            }),
+        );
+
+        pool_manager.map.insert(
+            p2_dev.clone(),
+            Pool::Down(TestDownPool {
+                name: p2_label.clone(),
+                up: TestUpPool {
+                    name: p2_label.clone(),
+                    path: Path::new("/mnt").join(&p2_label),
+                    usage: Usage {
+                        size: 1 * crate::TERABYTE,
+                        used: 0,
+                    },
+                    volumes: Arc::new(Mutex::new(vec![TestVolume {
+                        id: 0,
+                        name: "zos-cache".into(),
+                        path: Path::new("/mnt").join(p2_label).join("zos-cache"),
+                        usage: Usage {
+                            size: 100 * crate::GIGABYTE,
+                            used: 100 * crate::GIGABYTE,
+                        },
+                    }])),
+                },
+            }),
+        );
+
+        let mgr = StorageManager::new(blk, pool_manager)
             .await
             .expect("manager failed to create");
 
-        assert_eq!(mgr.ssds.len(), 1);
-        assert_eq!(mgr.ssd_size, 1 * crate::TERABYTE);
+        assert_eq!(mgr.ssds.len(), 2);
+        assert_eq!(mgr.ssd_size, 2 * crate::TERABYTE);
+        let pool_1 = &mgr.ssds["pool-1"];
+        assert_eq!(pool_1.state(), State::Down);
+
+        let pool_2 = &mgr.ssds["pool-2"];
+        assert_eq!(pool_2.state(), State::Up);
     }
 }

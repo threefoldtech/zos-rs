@@ -391,7 +391,20 @@ impl<E: Executor + 'static> BtrfsUtils<E> {
             .arg("create")
             .arg(path);
 
-        self.exec.run(&cmd).await?;
+        use crate::system::Error as ExecError;
+        match self.exec.run(&cmd).await {
+            Ok(_) => (),
+            Err(ExecError::Exit { code, stderr })
+                if code == 1
+                    && String::from_utf8_lossy(&stderr)
+                        .starts_with("ERROR: target path already exists:") =>
+            {
+                return Err(Error::VolumeAlreadyExists {
+                    volume: name.as_ref().into(),
+                })
+            }
+            Err(err) => return Err(err.into()),
+        };
         Ok(root.as_ref().join(name.as_ref()))
     }
 
@@ -410,7 +423,19 @@ impl<E: Executor + 'static> BtrfsUtils<E> {
         let path = root.as_ref().join(name.as_ref());
         let cmd = Command::new("btrfs").arg("subvolume").arg("show").arg(path);
 
-        let output = self.exec.run(&cmd).await?;
+        use crate::system::Error as ExecError;
+        let output = match self.exec.run(&cmd).await {
+            Ok(output) => output,
+            Err(ExecError::Exit { code, stderr })
+                if code == 1
+                    && String::from_utf8_lossy(&stderr).ends_with("No such file or directory") =>
+            {
+                return Err(Error::VolumeNotFound {
+                    volume: name.as_ref().into(),
+                })
+            }
+            Err(err) => return Err(err.into()),
+        };
         Ok(self.parse_volume_info(&output)?)
     }
 
