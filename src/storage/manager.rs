@@ -223,7 +223,8 @@ mod test {
 
     use super::StorageManager;
     use crate::storage::device::{Device, DeviceManager};
-    use crate::storage::pool::*;
+    use crate::storage::{pool::*, Manager};
+    use crate::storage::{Error as StorageError, Kind};
     use crate::Unit;
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -234,7 +235,7 @@ mod test {
     struct TestUpPool {
         pub name: String,
         pub path: PathBuf,
-        pub usage: Usage,
+        pub size: Unit,
         pub volumes: Arc<Mutex<Vec<TestVolume>>>,
     }
 
@@ -309,7 +310,16 @@ mod test {
 
         /// usage of the pool
         async fn usage(&self) -> Result<Usage> {
-            Ok(self.usage.clone())
+            let mut used = 0;
+            let vols = self.volumes.lock().await;
+            for vol in vols.iter() {
+                used += vol.usage().await?.used;
+            }
+
+            Ok(Usage {
+                size: self.size,
+                used: used,
+            })
         }
 
         /// down bring the pool down and return a DownPool
@@ -378,7 +388,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn initialize() {
+    async fn initialize_basic() {
         use crate::storage::device::test::*;
         use crate::storage::device::DeviceType;
         simple_logger::init_utc().unwrap();
@@ -388,6 +398,9 @@ mod test {
 
         let p2_dev: PathBuf = "/dev/test2".into();
         let p2_label: String = "pool-2".into();
+
+        let p3_dev: PathBuf = "/dev/test3".into();
+        let p3_label: String = "pool-3".into();
 
         let blk = TestManager {
             devices: vec![
@@ -405,6 +418,13 @@ mod test {
                     label: Some(p2_label.clone()),
                     size: 1 * crate::TERABYTE,
                 },
+                TestDevice {
+                    path: p3_dev.clone(),
+                    device_type: DeviceType::HDD,
+                    filesystem: Some("test".into()),
+                    label: Some(p3_label.clone()),
+                    size: 4 * crate::TERABYTE,
+                },
             ],
         };
 
@@ -417,10 +437,7 @@ mod test {
                 up: TestUpPool {
                     name: p1_label.clone(),
                     path: Path::new("/mnt").join(p1_label),
-                    usage: Usage {
-                        size: 1 * crate::TERABYTE,
-                        used: 0,
-                    },
+                    size: 1 * crate::TERABYTE,
                     volumes: Arc::default(),
                 },
             }),
@@ -433,10 +450,7 @@ mod test {
                 up: TestUpPool {
                     name: p2_label.clone(),
                     path: Path::new("/mnt").join(&p2_label),
-                    usage: Usage {
-                        size: 1 * crate::TERABYTE,
-                        used: 0,
-                    },
+                    size: 1 * crate::TERABYTE,
                     volumes: Arc::new(Mutex::new(vec![TestVolume {
                         id: 0,
                         name: "zos-cache".into(),
@@ -450,16 +464,50 @@ mod test {
             }),
         );
 
+        pool_manager.map.insert(
+            p3_dev.clone(),
+            Pool::Down(TestDownPool {
+                name: p3_label.clone(),
+                up: TestUpPool {
+                    name: p3_label.clone(),
+                    path: Path::new("/mnt").join(p3_label),
+                    size: 4 * crate::TERABYTE,
+                    volumes: Arc::default(),
+                },
+            }),
+        );
+
         let mgr = StorageManager::new(blk, pool_manager)
             .await
             .expect("manager failed to create");
 
         assert_eq!(mgr.ssds.len(), 2);
+        assert_eq!(mgr.hdds.len(), 1);
         assert_eq!(mgr.ssd_size, 2 * crate::TERABYTE);
+        assert_eq!(mgr.hdd_size, 4 * crate::TERABYTE);
+
         let pool_1 = &mgr.ssds["pool-1"];
         assert_eq!(pool_1.state(), State::Down);
 
         let pool_2 = &mgr.ssds["pool-2"];
         assert_eq!(pool_2.state(), State::Up);
+
+        let volumes = mgr.volumes().await.unwrap();
+        assert_eq!(volumes.len(), 1);
+
+        let cache_vol = &volumes[0];
+        assert_eq!(cache_vol.name, "zos-cache");
+        assert_eq!(cache_vol.path, Path::new("/mnt/pool-2/zos-cache"));
+
+        // find volume by name.
+        let vol = mgr.volume_lookup("zos-cache").await.unwrap();
+        assert_eq!(vol.name, "zos-cache");
+        assert_eq!(vol.path, Path::new("/mnt/pool-2/zos-cache"));
+
+        let errored = mgr.volume_lookup("not-found").await;
+
+        assert!(
+            matches!(errored, Err(StorageError::NotFound { kind, .. }) if kind == Kind::Volume)
+        );
     }
 }

@@ -10,7 +10,7 @@ pub mod pool;
 
 pub use mount::{mountinfo, mountpoint, Mount};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Kind {
     Volume,
     Disk,
