@@ -178,6 +178,20 @@ where
     U: UpPool,
     D: DownPool,
 {
+    async fn volumes(&self) -> Result<Vec<VolumeInfo>> {
+        let mut volumes = vec![];
+        for (_, pool) in self.ssds.iter() {
+            let up = match pool {
+                Pool::Up(up) => up,
+                _ => continue,
+            };
+
+            volumes.extend(up.volumes().await?.iter().map(|v| VolumeInfo::from(v)));
+        }
+
+        Ok(volumes)
+    }
+
     async fn volume_lookup<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<VolumeInfo> {
         for (_, pool) in self.ssds.iter() {
             let up = match pool {
@@ -203,18 +217,25 @@ where
         })
     }
 
-    async fn volumes(&self) -> Result<Vec<VolumeInfo>> {
-        let mut volumes = vec![];
+    async fn volume_delete<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<()> {
         for (_, pool) in self.ssds.iter() {
             let up = match pool {
-                Pool::Up(ref up) => up,
+                Pool::Up(up) => up,
                 _ => continue,
             };
 
-            volumes.extend(up.volumes().await?.iter().map(|v| VolumeInfo::from(v)));
+            match up.volume_delete(&name).await {
+                Ok(_) => {
+                    // volume was deleted we can return here or just try the rest to make sure
+                    // TODO: bring the pool down if there are no more volumes
+                    ()
+                }
+                Err(pool::Error::VolumeNotFound { .. }) => continue,
+                Err(err) => return Err(err.into()),
+            };
         }
 
-        Ok(volumes)
+        Ok(())
     }
 }
 
@@ -361,7 +382,9 @@ mod test {
 
         /// delete volume pools
         async fn volume_delete<S: AsRef<str> + Send>(&self, name: S) -> Result<()> {
-            unimplemented!()
+            let mut vols = self.volumes.lock().await;
+            vols.retain(|v| v.name() != name.as_ref());
+            Ok(())
         }
     }
 
@@ -388,7 +411,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn initialize_basic() {
+    async fn manager_initialize_basic() {
         use crate::storage::device::test::*;
         use crate::storage::device::DeviceType;
         simple_logger::init_utc().unwrap();
@@ -505,6 +528,68 @@ mod test {
         assert_eq!(vol.path, Path::new("/mnt/pool-2/zos-cache"));
 
         let errored = mgr.volume_lookup("not-found").await;
+
+        assert!(
+            matches!(errored, Err(StorageError::NotFound { kind, .. }) if kind == Kind::Volume)
+        );
+    }
+
+    #[tokio::test]
+    async fn manager_vol_delete() {
+        use crate::storage::device::test::*;
+        use crate::storage::device::DeviceType;
+        simple_logger::init_utc().unwrap();
+
+        let p1_dev: PathBuf = "/dev/test1".into();
+        let p1_label: String = "pool-1".into();
+
+        let blk = TestManager {
+            devices: vec![TestDevice {
+                path: p1_dev.clone(),
+                device_type: DeviceType::SSD,
+                filesystem: Some("test".into()),
+                label: Some(p1_label.clone()),
+                size: 1 * crate::TERABYTE,
+            }],
+        };
+
+        // map devices to pools
+        let mut pool_manager = TestPoolManager::default();
+        pool_manager.map.insert(
+            p1_dev.clone(),
+            Pool::Down(TestDownPool {
+                name: p1_label.clone(),
+                up: TestUpPool {
+                    name: p1_label.clone(),
+                    path: Path::new("/mnt").join(p1_label.clone()),
+                    size: 1 * crate::TERABYTE,
+                    volumes: Arc::new(Mutex::new(vec![TestVolume {
+                        id: 0,
+                        name: "zos-cache".into(),
+                        path: Path::new("/mnt").join(p1_label).join("zos-cache"),
+                        usage: Usage {
+                            size: 100 * crate::GIGABYTE,
+                            used: 100 * crate::GIGABYTE,
+                        },
+                    }])),
+                },
+            }),
+        );
+
+        let mgr = StorageManager::new(blk, pool_manager)
+            .await
+            .expect("manager failed to create");
+
+        assert_eq!(mgr.ssds.len(), 1);
+        assert_eq!(mgr.ssd_size, 1 * crate::TERABYTE);
+
+        let pool_1 = &mgr.ssds["pool-1"];
+        assert_eq!(pool_1.state(), State::Up);
+
+        // find volume by name.
+        mgr.volume_delete("zos-cache").await.unwrap();
+
+        let errored = mgr.volume_lookup("zos-cache").await;
 
         assert!(
             matches!(errored, Err(StorageError::NotFound { kind, .. }) if kind == Kind::Volume)

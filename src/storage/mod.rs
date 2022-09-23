@@ -65,6 +65,10 @@ where
 
 #[async_trait::async_trait]
 pub trait Manager {
-    async fn volume_lookup<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<VolumeInfo>;
+    /// list all available volumes information
     async fn volumes(&self) -> Result<Vec<VolumeInfo>>;
+    /// look up volume by name
+    async fn volume_lookup<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<VolumeInfo>;
+    /// delete volume by name. If volume not found, return Ok
+    async fn volume_delete<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<()>;
 }
