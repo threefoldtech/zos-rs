@@ -1,3 +1,4 @@
+mod mounts;
 /// implementation of the flist daemon
 mod utils;
 mod volume_allocator;
@@ -239,9 +240,26 @@ where
         self.storage.update(&name, size)?;
         Ok(mountpoint)
     }
-
     async fn hash_of_mount(&self, name: String) -> Result<String> {
-        unimplemented!()
+        let mountpoint = utils::mountpath(&name, &self.mountpoint)?;
+        let info = mounts::resolve(&mountpoint, &self.executor).await?;
+        let path = Path::new("/proc")
+            .join(info.pid.to_string())
+            .join("cmdline");
+        let cmdline = fs::read_to_string(path)?;
+        let parts = cmdline.split("\0");
+        for part in parts {
+            // if option start with the flist meta path
+            // let flist_path = &self.flist.into_os_string().into_string()?;
+            let path = Path::new(&part);
+            if path.starts_with(&self.flist) {
+                match path.file_name() {
+                    Some(filename) => return Ok(filename.to_string_lossy().to_string()),
+                    None => bail!("Failed to get hash for this mount"),
+                }
+            }
+        }
+        bail!("Failed to get hash for this mount")
     }
 
     async fn exists(&self, name: String) -> Result<bool> {
