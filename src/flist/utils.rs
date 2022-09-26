@@ -36,14 +36,14 @@ pub async fn download_flist<P: AsRef<Path>, T: AsRef<str>>(
 
             _ => bail!(
                 "Error reading flist file: {}, error {}",
-                &path.display().to_string(),
+                &path.display(),
                 error
             ),
         },
     };
     // Flist not found or hash is not correct, let's download
     let mut resp = reqwest::get(url).await?.bytes().await?.reader();
-    return save_flist(&mut resp, flist_path.as_ref()).await;
+    save_flist(&mut resp, flist_path.as_ref()).await
 }
 
 pub async fn save_flist<P: AsRef<Path>>(
@@ -156,7 +156,7 @@ pub async fn mount_bind<N: AsRef<str>, S: Syscalls, E: Executor, P: AsRef<Path>,
 ) -> Result<bool> {
     let mountpoint = mountpath(name, mountpoint)?;
     fs::create_dir_all(&mountpoint)?;
-    let permissions = Permissions::from_mode(0755);
+    let permissions = Permissions::from_mode(0o755);
     fs::set_permissions(&mountpoint, permissions)?;
     if let Err(_) = syscalls.mount(
         Some(ro),
@@ -165,7 +165,13 @@ pub async fn mount_bind<N: AsRef<str>, S: Syscalls, E: Executor, P: AsRef<Path>,
         nix::mount::MsFlags::MS_BIND,
         Option::<&str>::None,
     ) {
-        syscalls.umount(&mountpoint, None);
+        if let Err(err) = syscalls.umount(&mountpoint, None) {
+            log::debug!(
+                "Failed to unmount {}, Error: {}",
+                &mountpoint.display(),
+                err
+            );
+        }
         return Ok(false);
     };
     wait_mountpoint(&mountpoint, 3, executor).await?;
@@ -200,7 +206,6 @@ mod test {
         let path = download_flist(url, &Path::new("/tmp/flist_test").to_path_buf())
             .await
             .unwrap();
-        println!("{}", &path.display().to_string());
         let filename = hash_of_flist(url).await.unwrap();
         // make sure the downloaded file matches the hash of this flist
         assert_eq!(Some(OsStr::new(&filename)), path.file_name());
