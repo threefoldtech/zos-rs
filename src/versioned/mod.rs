@@ -8,21 +8,14 @@ use std::{fmt::Debug, os::unix::prelude::PermissionsExt};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+const MAX_VERSION_LENGTH : u8 = 50;
+
 pub struct VersionedReader<R>
 where
     R: AsyncRead + Unpin,
 {
     version: Version,
     inner: R,
-}
-
-impl<R> VersionedReader<R>
-where
-    R: AsyncRead + Unpin,
-{
-    pub fn version(&self) -> &Version {
-        &self.version
-    }
 }
 
 impl<R> Deref for VersionedReader<R>
@@ -52,6 +45,10 @@ pub enum Error {
 
     #[error("invalid version: {version}")]
     InvalidVersion { version: String },
+    
+    #[error("max version length is {}", MAX_VERSION_LENGTH)]
+    VersionLengthExceeded,
+
     #[error("{0}")]
     IO(#[from] std::io::Error),
 
@@ -65,24 +62,30 @@ impl<R> VersionedReader<R>
 where
     R: AsyncRead + Unpin,
 {
-    pub async fn new(mut r: R) -> Result<VersionedReader<R>> {
-        let mut double_quotes = false;
-        let mut version_bytes = Vec::<u8>::new();
-        loop {
-            // TODO: add max length for version to prevent from reading whole file before reaching '"'
+    
+    pub fn version(&self) -> &Version {
+        &self.version
+    }
 
+    pub async fn new(mut r: R) -> Result<VersionedReader<R>> {
+        let mut double_quotes: u8 = 0;
+        let mut version_bytes = Vec::<u8>::new();
+        for _ in 0..MAX_VERSION_LENGTH {
             let byte = r.read_u8().await?;
-            if double_quotes == false && byte != b'\"' {
+            if double_quotes == 0 && byte != b'\"' {
                 return Err(Error::NotVersioned);
             }
             if byte == b'\"' {
-                if double_quotes == true {
+                double_quotes += 1;
+                if double_quotes == 2 {
                     break;
                 }
-                double_quotes = true;
                 continue;
             }
             version_bytes.push(byte);
+        }
+        if double_quotes != 2 {
+            return Err(Error::VersionLengthExceeded);
         }
         let version_str = str::from_utf8(&version_bytes)
             .context("failed to convert version information to string")?;
