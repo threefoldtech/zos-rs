@@ -63,19 +63,19 @@ where
         fs::set_permissions(root, permissions)?;
 
         // prepare directory layout for the module
-        for path in vec!["flist", "cache", "mountpoint", "ro", "pid", "log"] {
+        for path in &["flist", "cache", "mountpoint", "ro", "pid", "log"] {
             fs::create_dir_all(root.join(path))?;
             let permissions = Permissions::from_mode(0o755);
             fs::set_permissions(root, permissions)?;
         }
         Ok(Self {
             root: root.into(),
-            flist: root.join("flist").into(),
-            cache: root.join("cache").into(),
-            mountpoint: root.join("mountpoint").into(),
-            ro: root.join("ro").into(),
-            pid: root.join("pid").into(),
-            log: root.join("log").into(),
+            flist: root.join("flist"),
+            cache: root.join("cache"),
+            mountpoint: root.join("mountpoint"),
+            ro: root.join("ro"),
+            pid: root.join("pid"),
+            log: root.join("log"),
             syscalls,
             storage,
             executor,
@@ -132,7 +132,7 @@ where
             .arg(&mountpoint.as_os_str());
         self.executor.run(&cmd).await?;
         nix::unistd::sync();
-        Ok(mountpoint.into())
+        Ok(mountpoint)
     }
     async fn mount_overlay<T: AsRef<str>, P: AsRef<Path>>(
         &self,
@@ -211,14 +211,20 @@ where
         match &opts.mode {
             MountMode::ReadOnly => {
                 mount_bind(&name, ro, &mountpoint, &self.syscalls, &self.executor).await?;
-                return Ok(mountpoint);
             }
             MountMode::ReadWrite(_) => {
                 self.mount_overlay(name, ro, &opts).await?;
-                return Ok(mountpoint);
             }
         }
-        //cleanup unused mounts
+        mounts::clean_unused_mounts(
+            &self.root,
+            &self.ro,
+            &self.mountpoint,
+            &self.executor,
+            &self.syscalls,
+        )
+        .await?;
+        Ok(mountpoint)
     }
 
     async fn unmount(&self, name: String) -> Result<()> {
@@ -231,6 +237,15 @@ where
         }
         fs::remove_dir_all(&mountpoint)?;
         self.storage.delete(&name)?;
+
+        mounts::clean_unused_mounts(
+            &self.root,
+            &self.ro,
+            &self.mountpoint,
+            &self.executor,
+            &self.syscalls,
+        )
+        .await?;
         return Ok(());
     }
 
