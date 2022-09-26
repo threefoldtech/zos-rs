@@ -1,214 +1,141 @@
-use read_iter::ReadIter;
+use anyhow::{Ok, Result};
 use semver::Version;
-use std::fmt::Display;
-use std::io::Read;
+use std::fs::Permissions;
 use std::str::{self, FromStr};
-use std::{
-    error::Error,
-    fmt::{self, Debug, Formatter},
-    fs,
-    io::Write,
-    os::unix::prelude::{OpenOptionsExt, PermissionsExt},
-    result::Result::Ok,
-};
+use std::{fmt::Debug, os::unix::prelude::PermissionsExt};
+use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-#[derive(Debug, Clone)]
-struct NotVersionedError {
-    msg: String,
-}
-
-impl Display for NotVersionedError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "no version information: {}", self.msg)
-    }
-}
-
-impl Error for NotVersionedError {}
-
-struct VersionedFile {
+struct VersionedFileReader<R>
+where
+    R: AsyncRead + Unpin,
+{
     pub version: Version,
-    pub data_reader: Box<dyn Read>,
+    pub inner: R,
 }
 
-impl Read for VersionedFile {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.data_reader.read(buf)
-    }
-    fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
-        self.data_reader.read_exact(buf)
-    }
-    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> std::io::Result<usize> {
-        self.data_reader.read_to_end(buf)
-    }
-    fn read_to_string(&mut self, buf: &mut String) -> std::io::Result<usize> {
-        self.data_reader.read_to_string(buf)
-    }
-    fn read_vectored(&mut self, bufs: &mut [std::io::IoSliceMut<'_>]) -> std::io::Result<usize> {
-        self.data_reader.read_vectored(bufs)
-    }
+#[derive(Debug, Error)]
+enum Error {
+    #[error("no verison information")]
+    NotVersioned,
 }
 
-impl VersionedFile {
-    fn new_writer<'a>(
-        file: &'a mut std::fs::File,
-        version: &Version,
-    ) -> Result<Box<dyn Write + 'a>, Box<dyn Error>> {
-        let v = serde_json::json!(version.to_string());
-        match file.write_all(v.to_string().as_bytes()) {
-            Ok(()) => (),
-            Err(err) => return Err(Box::new(err)),
-        };
-        return Ok(Box::new(file));
-    }
-
-    fn write_file(
-        path: &str,
-        version: &Version,
-        data: &[u8],
-        perm: fs::Permissions,
-    ) -> Result<(), Box<dyn Error>> {
-        let mut file = match fs::OpenOptions::new()
-            .mode(perm.mode())
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(path)
-        {
-            Ok(file) => file,
-            Err(err) => return Err(Box::new(err)),
-        };
-        let mut writer = match VersionedFile::new_writer(&mut file, version) {
-            Ok(writer) => writer,
-            Err(err) => return Err(err),
-        };
-        match writer.write_all(data) {
-            Ok(()) => (),
-            Err(err) => return Err(Box::new(err)),
+impl<R> VersionedFileReader<R>
+where
+    R: AsyncRead + Unpin,
+{
+    pub async fn new_reader(mut r: R) -> Result<VersionedFileReader<R>> {
+        let mut double_quotes = false;
+        let mut version_bytes = Vec::<u8>::new();
+        loop {
+            // TODO: add max length for version to prevent from reading whole file before reaching '"'
+            let byte = r.read_u8().await?;
+            if double_quotes == false && byte != b'\"' {
+                return Err(anyhow::Error::from(Error::NotVersioned));
+            }
+            if byte == b'\"' {
+                if double_quotes == true {
+                    break;
+                }
+                double_quotes = true;
+                continue;
+            }
+            version_bytes.push(byte);
         }
-        Ok(())
+        let version_str = str::from_utf8(&version_bytes)?;
+        let version = Version::from_str(version_str)?;
+        Ok(VersionedFileReader::<R> { version, inner: r })
     }
 
-    fn read_file(path: &str) -> Result<VersionedFile, Box<dyn Error>> {
-        let file = match fs::OpenOptions::new().read(true).open(path) {
-            Ok(file) => file,
-            Err(err) => return Err(Box::new(err)),
-        };
-        let new_reader = match VersionedFile::new_reader(Box::new(file)) {
-            Ok(reader) => reader,
-            Err(err) => return Err(err),
-        };
-        Ok(new_reader)
+    pub async fn read_file(path: &str) -> Result<(Version, Vec<u8>)> {
+        let mut file = tokio::fs::OpenOptions::new().read(true).open(path).await?;
+        let reader = VersionedFileReader::new_reader(&mut file).await?;
+        let mut buf = Vec::new();
+        reader.inner.read_to_end(&mut buf).await?;
+        Ok((reader.version, buf))
     }
+}
 
-    fn new_reader(r: Box<dyn std::io::Read>) -> Result<VersionedFile, Box<dyn Error>> {
-        let mut iter = ReadIter::new(r);
-        let mut reader = nop_json::Reader::new(&mut iter);
-        let version_str: String = match reader.read() {
-            Ok(res) => res,
-            Err(err) => {
-                return Err(Box::new(NotVersionedError {
-                    msg: err.to_string(),
-                }))
-            }
-        };
-        match iter.last_error() {
-            None => (),
-            Some(err) => {
-                return Err(Box::new(NotVersionedError {
-                    msg: err.to_string(),
-                }))
-            }
-        };
-        let version = match Version::from_str(&version_str) {
-            Ok(version) => version,
-            Err(err) => {
-                return Err(Box::new(NotVersionedError {
-                    msg: err.to_string(),
-                }))
-            }
-        };
-        Ok(VersionedFile {
-            version,
-            data_reader: Box::new(iter),
-        })
-    }
+pub async fn new_writer<W: AsyncWrite + Unpin>(w: &mut W, version: &Version) -> Result<()> {
+    let v_str = serde_json::json!(version.to_string());
+    w.write_all(v_str.to_string().as_bytes()).await?;
+    Ok(())
+}
+
+pub async fn write_file(
+    path: &str,
+    version: &Version,
+    data: &[u8],
+    perm: Permissions,
+) -> Result<()> {
+    let mut file = tokio::fs::OpenOptions::new()
+        .mode(perm.mode())
+        .truncate(true)
+        .create(true)
+        .write(true)
+        .open(path)
+        .await?;
+    new_writer(&mut file, &version).await?;
+    file.write_all(data).await?;
+    Ok(())
 }
 
 #[cfg(test)]
 
 mod test {
-    use super::VersionedFile;
-    use rand::Rng;
+    use crate::versioned::write_file;
+    use crate::versioned::VersionedFileReader;
+    use rand::{self, Rng};
     use semver::Version;
-    use std::fs;
     use std::io::Write;
     use std::str::FromStr;
-    use std::{
-        fs::Permissions,
-        io::Read,
-        os::unix::prelude::{OpenOptionsExt, PermissionsExt},
-    };
+    use std::{fs::Permissions, os::unix::prelude::PermissionsExt};
+    use tokio::fs::File;
 
-    #[test]
-    fn test_write_file() {
+    #[tokio::test]
+    async fn test_write_file() {
         let data = b"hellowrite";
         let version = Version::from_str("1.5.7-alpha").unwrap();
         let perm = Permissions::from_mode(0400);
-        let res = VersionedFile::write_file("/tmp/test_write", &version, data, perm);
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_str().unwrap();
+        let res = write_file(path, &version, data, perm).await;
         assert!(res.is_ok());
     }
 
-    #[test]
-    fn test_read_file() {
-        let mut file = match fs::OpenOptions::new()
-            .mode(0400)
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open("/tmp/test_write")
-        {
-            Ok(file) => file,
-            Err(err) => panic!("{}", err.to_string()),
-        };
-        match file.write_all("\"1.5.7-alpha\"helloworld".as_bytes()) {
-            Ok(()) => (),
-            Err(err) => panic!("{}", err.to_string()),
-        };
-        let version = Version::from_str("1.5.7-alpha").unwrap();
-        let data: Vec<u8> = Vec::from("helloworld");
-        let mut read_file = match VersionedFile::read_file("/tmp/test_write") {
-            Ok(file) => file,
-            Err(err) => panic!("{}", err.to_string()),
-        };
-        assert_eq!(version, read_file.version);
+    #[tokio::test]
+    async fn test_read_file() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_fmt(format_args!("\"1.5.7-alpha\"hello world"))
+            .unwrap();
+        let path = file.path().to_str().unwrap();
 
-        let mut read_data: [u8; 10] = [0; 10];
-        let res = read_file.data_reader.read_exact(&mut read_data);
-        assert!(res.is_ok());
+        let version = Version::from_str("1.5.7-alpha").unwrap();
+        let data: Vec<u8> = Vec::from("hello world");
+        let (read_version, read_data) = match VersionedFileReader::<File>::read_file(path).await {
+            Ok((version, data)) => (version, data),
+            Err(err) => panic!("{}", err.to_string()),
+        };
+        assert_eq!(version, read_version);
         assert_eq!(data, read_data);
     }
 
-    #[test]
-    fn test_write_read_file() {
+    #[tokio::test]
+    async fn test_write_read_file() {
         let data: Vec<u8> = (0..100)
             .map(|_| rand::thread_rng().gen_range(0..255))
             .collect();
         let version = Version::from_str("1.2.1-beta").unwrap();
-        let res = VersionedFile::write_file(
-            "/tmp/test_write",
-            &version,
-            &data,
-            Permissions::from_mode(0400),
-        );
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_str().unwrap();
+        let res = write_file(path, &version, &data, Permissions::from_mode(0400)).await;
         assert!(res.is_ok());
-        let mut read_file = match VersionedFile::read_file("/tmp/test_write") {
-            Ok(file) => file,
+
+        let (read_version, read_data) = match VersionedFileReader::<File>::read_file(path).await {
+            Ok((version, data)) => (version, data),
             Err(err) => panic!("{}", err.to_string()),
         };
-        assert_eq!(version, read_file.version);
-        let mut read_data: [u8; 100] = [0; 100];
-        let res = read_file.data_reader.read_exact(&mut read_data);
-        assert!(res.is_ok());
+        assert_eq!(version, read_version);
         assert_eq!(data, read_data);
     }
 }
