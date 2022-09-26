@@ -8,8 +8,10 @@ use std::{fmt::Debug, os::unix::prelude::PermissionsExt};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-const MAX_VERSION_LENGTH : u8 = 50;
+const MAX_VERSION_LENGTH: u8 = 50;
 
+/// VersionedReader is a reader that can load the version of the data from a stream
+/// without assuming anything regarding the underlying encoding of your data object.
 pub struct VersionedReader<R>
 where
     R: AsyncRead + Unpin,
@@ -40,12 +42,15 @@ where
 
 #[derive(Debug, Error)]
 pub enum Error {
+    /// NotVersioned error is raised if the underlying reader has no version
     #[error("no version information")]
     NotVersioned,
 
+    /// InvalidVersion error is raised if a version is found but it is not valid
     #[error("invalid version: {version}")]
     InvalidVersion { version: String },
-    
+
+    /// VersionLengthExceeded error is raised if [`MAX_VERSION_LENGTH`] is reached before reaching the end of the version's string.
     #[error("max version length is {}", MAX_VERSION_LENGTH)]
     VersionLengthExceeded,
 
@@ -62,11 +67,18 @@ impl<R> VersionedReader<R>
 where
     R: AsyncRead + Unpin,
 {
-    
+    /// Returns VersionedReader's version
     pub fn version(&self) -> &Version {
         &self.version
     }
 
+    /// Creates a new `VersionedReader<R>`
+    /// where R: [`AsyncRead`] + [`Unpin`].
+    ///
+    /// If parsing succeeds, returns `VersionedReader<R>` inside [`Ok`].
+    ///
+    /// # Errors
+    /// Returns `Err` if version information is not found or valid, or when there is an io error.
     pub async fn new(mut r: R) -> Result<VersionedReader<R>> {
         let mut double_quotes: u8 = 0;
         let mut version_bytes = Vec::<u8>::new();
@@ -97,6 +109,9 @@ where
     }
 }
 
+/// Reads versioned file's contents
+///
+/// If read succeeds, returns a tuple `(semver::Version, Vec<u8>)` containing file version and data inside [`Ok`].
 pub async fn read_file<P: AsRef<Path>>(path: P) -> Result<(Version, Vec<u8>)> {
     let mut file = tokio::fs::OpenOptions::new()
         .read(true)
@@ -108,12 +123,14 @@ pub async fn read_file<P: AsRef<Path>>(path: P) -> Result<(Version, Vec<u8>)> {
     Ok((reader.version, buf))
 }
 
+/// Writes version to a writer implementing [`AsyncWrite`].
 pub async fn new_writer<W: AsyncWrite + Unpin>(mut w: W, version: &Version) -> Result<W> {
     let v_str = serde_json::json!(version.to_string());
     w.write_all(v_str.to_string().as_bytes()).await?;
     Ok(w)
 }
 
+/// Writes version and data to a file.
 pub async fn write_file<P: AsRef<Path>>(
     path: P,
     version: &Version,
