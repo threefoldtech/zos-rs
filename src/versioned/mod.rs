@@ -77,14 +77,14 @@ where
     /// if the reader can not read the version from the stream.
     /// On success, the reader will have a version, and then can be used
     /// to load the data.
-    /// 
+    ///
     /// The reader should be a type implementing [`AsyncRead`] + [`Unpin`].
     ///
     /// If parsing succeeds, returns `VersionedReader<R>` inside [`Ok`].
     ///
     /// # Errors
     /// Returns `Err` if version information is not found or valid, or when there is an io error.
-    /// 
+    ///
     /// # Example
     /// ```
     /// let mut file = tokio::fs::OpenOptions::new()
@@ -93,7 +93,7 @@ where
     ///     .await?;
     /// let mut reader = VersionedReader::new(&mut file).await?;
     /// ```
-    
+
     pub async fn new(mut r: R) -> Result<VersionedReader<R>> {
         let mut double_quotes: u8 = 0;
         let mut version_bytes = Vec::<u8>::new();
@@ -175,7 +175,7 @@ mod test {
     use std::{fs::Permissions, os::unix::prelude::PermissionsExt};
 
     #[tokio::test]
-    async fn test_max_version_length(){
+    async fn test_max_version_length() {
         let long_version: Vec<u8> = vec![b'a'; 100];
         let reader = format!("\"{}\"data", std::str::from_utf8(&long_version).unwrap());
         let versioned = VersionedReader::new(reader.as_bytes()).await;
