@@ -8,7 +8,31 @@ use std::{fmt::Debug, os::unix::prelude::PermissionsExt};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+/// Maximum allowed version length.
 const MAX_VERSION_LENGTH: u8 = 50;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    /// NotVersioned error is raised if the underlying reader has no version
+    #[error("no version information")]
+    NotVersioned,
+
+    /// InvalidVersion error is raised if a version is found but it is not valid
+    #[error("invalid version: {version}")]
+    InvalidVersion { version: String },
+
+    /// VersionLengthExceeded error is raised if [`MAX_VERSION_LENGTH`] is reached before reaching the end of the version's string.
+    #[error("max version length is {}", MAX_VERSION_LENGTH)]
+    VersionLengthExceeded,
+
+    #[error("{0}")]
+    IO(#[from] std::io::Error),
+
+    #[error("{0}")]
+    Other(#[from] anyhow::Error),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// VersionedReader is a reader that can load the version of the data from a stream
 /// without assuming anything regarding the underlying encoding of your data object.
@@ -40,45 +64,36 @@ where
     }
 }
 
-#[derive(Debug, Error)]
-pub enum Error {
-    /// NotVersioned error is raised if the underlying reader has no version
-    #[error("no version information")]
-    NotVersioned,
-
-    /// InvalidVersion error is raised if a version is found but it is not valid
-    #[error("invalid version: {version}")]
-    InvalidVersion { version: String },
-
-    /// VersionLengthExceeded error is raised if [`MAX_VERSION_LENGTH`] is reached before reaching the end of the version's string.
-    #[error("max version length is {}", MAX_VERSION_LENGTH)]
-    VersionLengthExceeded,
-
-    #[error("{0}")]
-    IO(#[from] std::io::Error),
-
-    #[error("{0}")]
-    Other(#[from] anyhow::Error),
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
-
 impl<R> VersionedReader<R>
 where
     R: AsyncRead + Unpin,
 {
-    /// Returns VersionedReader's version
+    /// Return the version of the data.
     pub fn version(&self) -> &Version {
         &self.version
     }
 
-    /// Creates a new `VersionedReader<R>`
-    /// where R: [`AsyncRead`] + [`Unpin`].
+    /// Creates a new versioned reader from a stream. It fails
+    /// if the reader can not read the version from the stream.
+    /// On success, the reader will have a version, and then can be used
+    /// to load the data.
+    /// 
+    /// The reader should be a type implementing [`AsyncRead`] + [`Unpin`].
     ///
     /// If parsing succeeds, returns `VersionedReader<R>` inside [`Ok`].
     ///
     /// # Errors
     /// Returns `Err` if version information is not found or valid, or when there is an io error.
+    /// 
+    /// # Example
+    /// ```
+    /// let mut file = tokio::fs::OpenOptions::new()
+    ///     .read(true)
+    ///     .open(path.as_ref())
+    ///     .await?;
+    /// let mut reader = VersionedReader::new(&mut file).await?;
+    /// ```
+    
     pub async fn new(mut r: R) -> Result<VersionedReader<R>> {
         let mut double_quotes: u8 = 0;
         let mut version_bytes = Vec::<u8>::new();
@@ -109,7 +124,7 @@ where
     }
 }
 
-/// Reads versioned file's contents
+/// Reads versioned file's contents.
 ///
 /// If read succeeds, returns a tuple `(semver::Version, Vec<u8>)` containing file version and data inside [`Ok`].
 pub async fn read_file<P: AsRef<Path>>(path: P) -> Result<(Version, Vec<u8>)> {
@@ -158,6 +173,14 @@ mod test {
     use std::io::Write;
     use std::str::FromStr;
     use std::{fs::Permissions, os::unix::prelude::PermissionsExt};
+
+    #[tokio::test]
+    async fn test_max_version_length(){
+        let long_version: Vec<u8> = vec![b'a'; 100];
+        let reader = format!("\"{}\"data", std::str::from_utf8(&long_version).unwrap());
+        let versioned = VersionedReader::new(reader.as_bytes()).await;
+        assert!(matches!(versioned, Err(Error::VersionLengthExceeded)))
+    }
 
     #[tokio::test]
     async fn test_write_file() {
