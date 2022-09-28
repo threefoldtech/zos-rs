@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 
 use crate::Unit;
 pub struct Usage {
@@ -14,7 +14,6 @@ pub struct Volume {
     pub path: PathBuf,
     pub usage: Usage,
 }
-
 pub trait VolumeAllocator {
     // CreateFilesystem creates a filesystem with a given size. The filesystem
     // is mounted, and the path to the mountpoint is returned. The filesystem
@@ -31,8 +30,35 @@ pub trait VolumeAllocator {
     // The filesystem will be unmounted and subsequently removed.
     // All data contained in the filesystem will be lost, and the
     // space which has been reserved for this filesystem will be reclaimed.
-    fn delete<S: AsRef<str>>(&self, cname: S) -> Result<()>;
+    fn delete<S: AsRef<str>>(&self, name: S) -> Result<()>;
     // Path return the filesystem named name
     // if no filesystem with this name exists, an error is returned
     fn lookup<S: AsRef<str>>(&self, name: S) -> Result<Volume>;
+}
+pub struct DummyVolumeAllocator;
+
+impl VolumeAllocator for DummyVolumeAllocator {
+    fn create<S: AsRef<str>>(&self, name: S, size: Unit) -> Result<Volume> {
+        return Ok(Volume {
+            name: name.as_ref().to_string(),
+            path: PathBuf::from("/volumes/vol1"),
+            usage: Usage { size, used: 0 },
+        });
+    }
+
+    fn update<S: AsRef<str>>(&self, _name: S, _size: Unit) -> Result<()> {
+        Ok(())
+    }
+
+    fn delete<S: AsRef<str>>(&self, _name: S) -> Result<()> {
+        Ok(())
+    }
+
+    fn lookup<S: AsRef<str>>(&self, name: S) -> Result<Volume> {
+        return Ok(Volume {
+            name: name.as_ref().to_string(),
+            path: PathBuf::from("/volumes/vol1"),
+            usage: Usage { size: 100, used: 0 },
+        });
+    }
 }

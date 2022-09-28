@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 use async_recursion::async_recursion;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::{collections::HashMap, fs, path::Path, str::FromStr};
+use std::{collections::HashMap, fs, path::Path};
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct G8ufsInfo {
     pub pid: i64,
@@ -120,7 +120,7 @@ where
     E: Executor,
     S: Syscalls,
 {
-    let all = mounts(executor).await?;
+    let all = list(executor).await?;
     let mut ro_targets = HashMap::new();
     // Get all flists managed by flist Daemony
     let all_under_root = all
@@ -180,7 +180,7 @@ where
     Ok(())
 }
 
-pub async fn mounts<E: Executor>(executor: &E) -> Result<Vec<MountInfo>> {
+pub async fn list<E: Executor>(executor: &E) -> Result<Vec<MountInfo>> {
     let cmd = Command::new("findmnt").arg("-J").arg("-l");
     let output = executor.run(&cmd).await?;
     let filesysteminfo: FileSystemInfo = serde_json::from_slice(&output)?;
@@ -189,7 +189,7 @@ pub async fn mounts<E: Executor>(executor: &E) -> Result<Vec<MountInfo>> {
 
 #[cfg(test)]
 mod test {
-    use super::{mounts, resolve, FsType, MountInfo};
+    use super::{list, resolve, FsType, MountInfo};
     use crate::system::Command;
 
     #[tokio::test]
@@ -234,7 +234,7 @@ mod test {
             .times(1)
             .returning(|_: &Command| Ok(Vec::from(MOUNT_INFO)));
 
-        let res: Vec<MountInfo> = mounts(&exec)
+        let res: Vec<MountInfo> = list(&exec)
             .await
             .unwrap()
             .into_iter()
