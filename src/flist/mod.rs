@@ -1,192 +1,49 @@
+mod db;
 mod mounts;
 /// implementation of the flist daemon
-mod utils;
 mod volume_allocator;
 use crate::bus::api::Flist;
 use crate::bus::types::storage::MountMode;
 use crate::bus::types::storage::MountOptions;
-use crate::bus::types::storage::WriteLayer;
-use crate::env;
-use crate::system::Command;
+
 use crate::system::Executor;
 use crate::system::Syscalls;
 
-use anyhow::{bail, Result};
-use nix;
-use nix::mount;
-use std::fs;
-use std::fs::Permissions;
-use std::os::unix::prelude::PermissionsExt;
+use anyhow::Result;
+use std::path::PathBuf;
 
-use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
-
-use self::utils::mount_bind;
+use self::db::MetadataDbMgr;
 use self::volume_allocator::VolumeAllocator;
 
 pub struct FListDaemon<A, S, E>
 where
     A: VolumeAllocator,
     S: Syscalls,
-    E: Executor,
+    E: Executor + Sync + Send,
 {
-    // root directory where all
-    // the working file of the module will be located
-    root: PathBuf,
-
-    // underneath are the path for each
-    // sub folder used by the flist module
-    flist: PathBuf,
-    cache: PathBuf,
-    mountpoint: PathBuf,
-    ro: PathBuf,
-    pid: PathBuf,
-    log: PathBuf,
-    syscalls: S,
-    storage: A,
-    executor: E,
+    db: MetadataDbMgr<A, S, E>,
 }
 
 impl<A, S, E> FListDaemon<A, S, E>
 where
     A: VolumeAllocator,
     S: Syscalls,
-    E: Executor,
+    E: Executor + Sync + Send,
 {
-    fn new<R: Into<PathBuf>>(root: R, syscalls: S, storage: A, executor: E) -> Result<Self>
+    pub async fn new<R: Into<PathBuf>>(
+        root: R,
+        syscalls: S,
+        storage: A,
+        executor: E,
+    ) -> Result<Self>
     where
         R: AsRef<str>,
+        A: VolumeAllocator,
+        S: Syscalls,
+        E: Executor,
     {
-        let root = Path::new(root.as_ref());
-        fs::create_dir_all(root)?;
-        let permissions = Permissions::from_mode(0o755);
-        fs::set_permissions(root, permissions)?;
-
-        // prepare directory layout for the module
-        for path in &["flist", "cache", "mountpoint", "ro", "pid", "log"] {
-            fs::create_dir_all(root.join(path))?;
-            let permissions = Permissions::from_mode(0o755);
-            fs::set_permissions(root, permissions)?;
-        }
-        Ok(Self {
-            root: root.into(),
-            flist: root.join("flist"),
-            cache: root.join("cache"),
-            mountpoint: root.join("mountpoint"),
-            ro: root.join("ro"),
-            pid: root.join("pid"),
-            log: root.join("log"),
-            syscalls,
-            storage,
-            executor,
-        })
-    }
-
-    // MountRO mounts an flist in read-only mode. This mount then can be shared between multiple rw mounts
-    // TODO: how to know that this ro mount is no longer used, hence can be unmounted and cleaned up?
-    async fn mount_ro<T: AsRef<str>, W: AsRef<str>>(
-        &self,
-        url: T,
-        storage_url: Option<W>,
-    ) -> Result<PathBuf> {
-        // this should return always the flist mountpoint. which is used
-        // as a base for all RW mounts.
-        let hash = match utils::hash_of_flist(&url).await {
-            Ok(hash) => hash,
-            Err(_) => bail!("Failed to get flist hash"),
-        };
-        let mountpoint = utils::flist_mount_path(&hash, &self.ro)?;
-        match utils::valid(&mountpoint, &self.executor, &self.syscalls).await {
-            Err(error) => match error.kind() {
-                ErrorKind::AlreadyExists => return Ok(mountpoint),
-
-                _ => bail!("validating of mount point failed"),
-            },
-            _ => {}
-        };
-
-        fs::create_dir_all(&mountpoint)?;
-        let storage_url = match storage_url {
-            Some(storage_url) => storage_url.as_ref().to_string(),
-            None => {
-                let environ = env::get()?;
-                environ.storage_url
-            }
-        };
-
-        let flist_path = utils::download_flist(url, &self.flist).await?;
-        let log_name = hash + ".log";
-        let log_path = Path::new(&self.log).join(&log_name);
-
-        let cmd = Command::new("g8ufs")
-            .arg("--cache")
-            .arg(self.cache.as_os_str())
-            .arg("--meta")
-            .arg(flist_path)
-            .arg("--storage-url")
-            .arg(storage_url)
-            .arg("--daemon")
-            .arg("--log")
-            .arg(log_path.as_os_str())
-            .arg("--ro")
-            .arg(&mountpoint.as_os_str());
-        self.executor.run(&cmd).await?;
-        nix::unistd::sync();
-        Ok(mountpoint)
-    }
-    async fn mount_overlay<T: AsRef<str>, P: AsRef<Path>>(
-        &self,
-        name: T,
-        ro: P,
-        opts: &MountOptions,
-    ) -> Result<()> {
-        let mountpoint = utils::mountpath(&name, &self.mountpoint)?;
-        tokio::fs::create_dir_all(&mountpoint).await?;
-        let permissions = Permissions::from_mode(0o755);
-        fs::set_permissions(mountpoint.as_path(), permissions)?;
-        if let MountMode::ReadWrite(WriteLayer::Size(limit)) = opts.mode {
-            // no persisted volume provided, hence
-            // we need to create one, or find one that is already exists
-            let persistent = match self.storage.lookup(&name) {
-                Ok(volume) => volume.path,
-                Err(_) => {
-                    // Volume doesn't exist create a new one
-                    if limit == 0 {
-                        bail!("Invalid mount option, missing disk type");
-                    }
-                    let path = match self.storage.create(&name, limit) {
-                        Ok(volume) => volume.path,
-                        Err(e) => {
-                            self.storage.delete(&name)?;
-                            bail!(e)
-                        }
-                    };
-                    path
-                }
-            };
-            let rw = persistent.join("rw");
-            let wd = persistent.join("wd");
-            let paths = vec![&rw, &wd];
-            for path in paths {
-                tokio::fs::create_dir_all(&path).await?;
-                let permissions = Permissions::from_mode(0o755);
-                fs::set_permissions(path.as_path(), permissions)?;
-            }
-            let data = format!(
-                "lowerdir={},upperdir={},workdir={}",
-                ro.as_ref().display(),
-                &rw.display(),
-                &wd.display()
-            );
-            self.syscalls.mount(
-                Some("overlay"),
-                mountpoint,
-                Some("overlay"),
-                mount::MsFlags::MS_NOATIME,
-                Some(&data),
-            )?;
-        };
-        Ok(())
+        let db = db::MetadataDbMgr::new(root, syscalls, storage, executor).await?;
+        Ok(Self { db })
     }
 }
 
@@ -198,88 +55,42 @@ where
     E: Executor + Sync + Send,
 {
     async fn mount(&self, name: String, url: String, opts: MountOptions) -> Result<PathBuf> {
-        let mountpoint = utils::mountpath(&name, &self.mountpoint)?;
-
-        match utils::valid(&mountpoint, &self.executor, &self.syscalls).await {
-            Err(err) => match err.kind() {
-                ErrorKind::AlreadyExists => return Ok(mountpoint),
-                _ => bail!("failed to validate mountpoint"),
-            },
-            _ => {}
-        };
-        let ro = self.mount_ro(&url, opts.storage.clone()).await?;
+        let mountpoint = self.db.mountpath(&name)?;
+        if self.db.is_mounted(&mountpoint).await {
+            return Ok(mountpoint);
+        }
+        self.db.valid(&mountpoint).await?;
+        // let ro = self.mount_ro(&url, opts.storage.clone()).await?;
+        let ro_mount_path = self.db.mount_ro(&url, opts.storage.clone()).await?;
         match &opts.mode {
             MountMode::ReadOnly => {
-                mount_bind(&name, ro, &mountpoint, &self.syscalls, &self.executor).await?;
+                self.db.mount_bind(ro_mount_path, &mountpoint).await?;
             }
             MountMode::ReadWrite(_) => {
-                self.mount_overlay(name, ro, &opts).await?;
+                self.db
+                    .mount_overlay(name, ro_mount_path, &mountpoint, &opts)
+                    .await?;
             }
         }
-        mounts::clean_unused_mounts(
-            &self.root,
-            &self.ro,
-            &self.mountpoint,
-            &self.executor,
-            &self.syscalls,
-        )
-        .await?;
+        self.db.clean_unused_mounts().await?;
         Ok(mountpoint)
     }
 
     async fn unmount(&self, name: String) -> Result<()> {
-        let mountpoint = utils::mountpath(&name, &self.mountpoint)?;
-        if let Err(err) = utils::valid(&mountpoint, &self.executor, &self.syscalls).await {
-            match err.kind() {
-                ErrorKind::AlreadyExists => self.syscalls.umount(&mountpoint, None)?,
-                _ => {}
-            }
-        }
-        fs::remove_dir_all(&mountpoint)?;
-        self.storage.delete(&name)?;
-
-        mounts::clean_unused_mounts(
-            &self.root,
-            &self.ro,
-            &self.mountpoint,
-            &self.executor,
-            &self.syscalls,
-        )
-        .await?;
-        return Ok(());
+        self.db.unmount(&name).await?;
+        self.db.clean_unused_mounts().await
     }
 
     async fn update(&self, name: String, size: crate::Unit) -> Result<PathBuf> {
-        let mountpoint = utils::mountpath(&name, &self.mountpoint)?;
-        utils::is_mountpoint(&mountpoint, &self.executor).await?;
-        self.storage.update(&name, size)?;
+        let mountpoint = self.db.update(&name, size).await?;
         Ok(mountpoint)
     }
+    // returns the hash of the given flist name
     async fn hash_of_mount(&self, name: String) -> Result<String> {
-        let mountpoint = utils::mountpath(&name, &self.mountpoint)?;
-        let info = mounts::resolve(&mountpoint, &self.executor).await?;
-        let path = Path::new("/proc")
-            .join(info.pid.to_string())
-            .join("cmdline");
-        let cmdline = fs::read_to_string(path)?;
-        let parts = cmdline.split("\0");
-        for part in parts {
-            // if option start with the flist meta path
-            // let flist_path = &self.flist.into_os_string().into_string()?;
-            let path = Path::new(&part);
-            if path.starts_with(&self.flist) {
-                match path.file_name() {
-                    Some(filename) => return Ok(filename.to_string_lossy().to_string()),
-                    None => bail!("Failed to get hash for this mount"),
-                }
-            }
-        }
-        bail!("Failed to get hash for this mount")
+        self.db.hash_of_mount(name).await
     }
 
     async fn exists(&self, name: String) -> Result<bool> {
-        let mountpoint = utils::mountpath(name, &self.mountpoint)?;
-        utils::valid(&mountpoint, &self.executor, &self.syscalls).await?;
-        return Ok(true);
+        self.db.exists(name).await
     }
 }
