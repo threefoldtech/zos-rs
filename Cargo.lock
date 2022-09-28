@@ -488,27 +488,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nop-json"
-version = "2.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e034778f863c2f4b1d574a58a4140d6bdb367e8ed6fdf9b7838c13f3b67918e7"
-dependencies = [
- "nop-json-derive",
- "numtoa",
-]
-
-[[package]]
-name = "nop-json-derive"
-version = "2.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d9208b496efcef23dcfa6034b4bc4c24ec54c1e00208d67ff27b07c44c6e07b"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "normalize-line-endings"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -532,12 +511,6 @@ dependencies = [
  "hermit-abi",
  "libc",
 ]
-
-[[package]]
-name = "numtoa"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6aa2c4e539b869820a2b82e1aef6ff40aa85e65decdd5185e83fb4b1249cd00f"
 
 [[package]]
 name = "once_cell"
@@ -723,12 +696,6 @@ dependencies = [
  "uuid",
  "workers",
 ]
-
-[[package]]
-name = "read_iter"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "460219c0d2d7a6758a3925f53e6c50c77394e8602e707a14ef997d1f35d6dbc2"
 
 [[package]]
 name = "redis"
@@ -1270,10 +1237,8 @@ dependencies = [
  "lazy_static",
  "log",
  "mockall",
- "nop-json",
  "rand",
  "rbus",
- "read_iter",
  "rmp-serde 1.1.0",
  "semver",
  "serde",

@@ -86,7 +86,7 @@ where
     /// Returns `Err` if version information is not found or valid, or when there is an io error.
     ///
     /// # Example
-    /// ```
+    /// ```ignore
     /// let mut file = tokio::fs::OpenOptions::new()
     ///     .read(true)
     ///     .open(path.as_ref())
@@ -159,7 +159,7 @@ pub async fn write_file<P: AsRef<Path>>(
         .write(true)
         .open(path.as_ref())
         .await?;
-    let mut file = new_writer(file, &version).await?;
+    let mut file = new_writer(file, version).await?;
     file.write_all(data).await?;
     Ok(())
 }
