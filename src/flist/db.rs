@@ -57,7 +57,6 @@ where
             cache: root.join("cache"),
             mountpoint: root.join("mountpoint"),
             ro: root.join("ro"),
-            pid: root.join("pid"),
             log: root.join("log"),
             root,
             syscalls,
