@@ -8,7 +8,7 @@ pub mod manager;
 pub mod mount;
 pub mod pool;
 
-pub use mount::{mountinfo, mountpoint, Mount};
+pub use mount::{mountinfo, mountpoint, mounts, Mount};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Kind {

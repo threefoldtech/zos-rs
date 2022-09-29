@@ -36,7 +36,7 @@ impl Mount {
 
 /// mountpoint returns mount information of target if mount exists
 pub async fn mountpoint<P: AsRef<Path>>(target: P) -> Result<Option<Mount>> {
-    let mounts = parser().await?;
+    let mounts = mounts().await?;
     let target = target.as_ref();
     Ok(mounts.into_iter().filter(|m| m.target == target).next())
 }
@@ -45,12 +45,13 @@ pub async fn mountpoint<P: AsRef<Path>>(target: P) -> Result<Option<Mount>> {
 /// multiple times Vec will have more than one element.
 /// note that source is not a "path" because source can be other things
 pub async fn mountinfo<P: AsRef<str>>(source: P) -> Result<Vec<Mount>> {
-    let mounts = parser().await?;
+    let mounts = mounts().await?;
     let source = source.as_ref();
     Ok(mounts.into_iter().filter(|m| m.source == source).collect())
 }
 
-async fn parser() -> Result<Vec<Mount>> {
+/// list all mounts on the system
+pub async fn mounts() -> Result<Vec<Mount>> {
     let file = OpenOptions::new().read(true).open(MOUNT_INFO).await?;
 
     parser_reader(BufReader::new(file)).await
