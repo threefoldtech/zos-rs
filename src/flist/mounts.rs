@@ -14,10 +14,6 @@ struct OverlayInfo {
     upper_dir: String,
     work_dir: String,
 }
-enum ResolveInfo {
-    G8ufsInfo,
-    OverlayInfo,
-}
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum FsType {
     G8UFS,
