@@ -19,8 +19,8 @@ pub struct StorageManager<M, P, U, D>
 where
     M: DeviceManager,
     P: PoolManager<M, U, D>,
-    U: UpPool,
-    D: DownPool,
+    U: UpPool<DownPool = D>,
+    D: DownPool<UpPool = U>,
 {
     device_mgr: M,
     pool_mgr: P,
@@ -166,8 +166,8 @@ impl<M, P, U, D> super::Manager for StorageManager<M, P, U, D>
 where
     M: DeviceManager,
     P: PoolManager<M, U, D>,
-    U: UpPool,
-    D: DownPool,
+    U: UpPool<DownPool = D>,
+    D: DownPool<UpPool = U>,
 {
     async fn volumes(&self) -> Result<Vec<VolumeInfo>> {
         let mut volumes = vec![];

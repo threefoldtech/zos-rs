@@ -199,8 +199,8 @@ pub enum State {
 #[derive(Clone)]
 pub enum Pool<U, D>
 where
-    U: UpPool,
-    D: DownPool,
+    U: UpPool<DownPool = D>,
+    D: DownPool<UpPool = U>,
 {
     /// Up pool state
     Up(U),
@@ -295,8 +295,8 @@ where
 
 impl<U, D> Display for Pool<U, D>
 where
-    U: UpPool,
-    D: DownPool,
+    U: UpPool<DownPool = D>,
+    D: DownPool<UpPool = U>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -311,8 +311,8 @@ where
 pub trait PoolManager<M, U, D>: Send + Sync
 where
     M: DeviceManager,
-    U: UpPool,
-    D: DownPool,
+    U: UpPool<DownPool = D>,
+    D: DownPool<UpPool = U>,
 {
     async fn get(&self, manager: &M, device: M::Device) -> Result<Pool<U, D>>;
 }
