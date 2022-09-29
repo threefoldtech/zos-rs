@@ -1,7 +1,7 @@
 /// a pool is a wrapper around a disk device. right now a single pool
 /// uses a single disk device.
 use crate::Unit;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -58,6 +58,77 @@ pub enum Error {
 
 pub type Result<T> = anyhow::Result<T, Error>;
 
+pub struct UpError<D>
+where
+    D: DownPool,
+{
+    pub pool: D,
+    pub error: Error,
+}
+
+impl<D> Display for UpError<D>
+where
+    D: DownPool,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "failed to bring pool {} up: {}",
+            self.pool.name(),
+            self.error
+        )
+    }
+}
+
+impl<D> Debug for UpError<D>
+where
+    D: DownPool,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "failed to bring pool {} up: {}",
+            self.pool.name(),
+            self.error
+        )
+    }
+}
+
+pub struct DownError<U>
+where
+    U: UpPool,
+{
+    pub pool: U,
+    pub error: Error,
+}
+
+impl<U> Display for DownError<U>
+where
+    U: UpPool,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "failed to bring pool {} down: {}",
+            self.pool.name(),
+            self.error
+        )
+    }
+}
+
+impl<U> Debug for DownError<U>
+where
+    U: UpPool,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "failed to bring pool {} down: {}",
+            self.pool.name(),
+            self.error
+        )
+    }
+}
 /// Volume type.
 #[async_trait::async_trait]
 pub trait Volume: Send + Sync {
@@ -81,7 +152,7 @@ pub trait Volume: Send + Sync {
 
 /// UpPool is trait for a pool that is hooked to the system and accessible
 #[async_trait::async_trait]
-pub trait UpPool: Send + Sync {
+pub trait UpPool: Sized + Send + Sync {
     /// DownPool is the type returned by (down) operation
     type DownPool: DownPool;
 
@@ -98,7 +169,7 @@ pub trait UpPool: Send + Sync {
     async fn usage(&self) -> Result<Usage>;
 
     /// down bring the pool down and return a DownPool
-    async fn down(self) -> Result<Self::DownPool>;
+    async fn down(self) -> std::result::Result<Self::DownPool, DownError<Self>>;
 
     /// create a volume
     async fn volume_create<S: AsRef<str> + Send>(&self, name: S) -> Result<Self::Volume>;
@@ -111,10 +182,10 @@ pub trait UpPool: Send + Sync {
 }
 
 #[async_trait::async_trait]
-pub trait DownPool: Send + Sync {
+pub trait DownPool: Sized + Send + Sync {
     type UpPool: UpPool;
 
-    async fn up(self) -> Result<Self::UpPool>;
+    async fn up(self) -> std::result::Result<Self::UpPool, UpError<Self>>;
 
     fn name(&self) -> &str;
 }
@@ -135,22 +206,22 @@ where
     Up(U),
     /// Down pool stat
     Down(D),
-    // /// the none value is used as a place holder
-    // /// to be used with mem::replace or mem::swap
-    // None,
+    /// the transit value is used as a place holder
+    /// during
+    Transit,
 }
 
 impl<U, D> Pool<U, D>
 where
-    U: UpPool,
-    D: DownPool,
+    U: UpPool<DownPool = D>,
+    D: DownPool<UpPool = U>,
 {
     /// return the name of the pool
     pub fn name(&self) -> &str {
         match self {
             Self::Up(up) => up.name(),
             Self::Down(down) => down.name(),
-            //Self::None => unimplemented!(), //shouldn't happen
+            Self::Transit => unreachable!(),
         }
     }
 
@@ -158,7 +229,67 @@ where
         match self {
             Self::Up(_) => State::Up,
             Self::Down(_) => State::Down,
+            Self::Transit => unreachable!(),
         }
+    }
+
+    pub fn as_up(&self) -> &U {
+        if let Self::Up(ref p) = self {
+            return p;
+        }
+        panic!("pool is not up")
+    }
+
+    pub fn as_down(&self) -> &D {
+        if let Self::Down(ref p) = self {
+            return p;
+        }
+        panic!("pool is not down")
+    }
+
+    pub async fn into_up(&mut self) -> Result<&U> {
+        if self.state() == State::Up {
+            return Ok(self.as_up());
+        }
+
+        let current = std::mem::replace(self, Self::Transit);
+        let down = match current {
+            Self::Down(down) => down,
+            _ => unreachable!(),
+        };
+
+        let up = match down.up().await {
+            Ok(up) => up,
+            Err(UpError { pool, error }) => {
+                let _ = std::mem::replace(self, Self::Down(pool));
+                return Err(error);
+            }
+        };
+
+        let _ = std::mem::replace(self, Self::Up(up));
+        Ok(self.as_up())
+    }
+
+    pub async fn into_down(&mut self) -> Result<&D> {
+        if self.state() == State::Down {
+            return Ok(self.as_down());
+        }
+        let current = std::mem::replace(self, Self::Transit);
+        let up = match current {
+            Self::Up(up) => up,
+            _ => unreachable!(),
+        };
+
+        let down = match up.down().await {
+            Ok(down) => down,
+            Err(DownError { pool, error }) => {
+                let _ = std::mem::replace(self, Self::Up(pool));
+                return Err(error);
+            }
+        };
+
+        let _ = std::mem::replace(self, Self::Down(down));
+        Ok(self.as_down())
     }
 }
 
@@ -171,6 +302,7 @@ where
         match self {
             Self::Up(up) => write!(f, "up({})", up.name()),
             Self::Down(down) => write!(f, "down({})", down.name()),
+            Self::Transit => write!(f, "pool is in transit state"),
         }
     }
 }

@@ -123,7 +123,7 @@ where
                 }
             };
 
-            let pool = match self.pool_mgr.get(&self.device_mgr, device).await {
+            let mut pool = match self.pool_mgr.get(&self.device_mgr, device).await {
                 Ok(pool) => pool,
                 Err(err) => {
                     log::error!("failed to initialize pool for device: {}", err);
@@ -132,22 +132,13 @@ where
                 }
             };
 
-            // we need to bring the pool up to calculate the size
-            let up = match pool {
-                Pool::Up(up) => up,
-                Pool::Down(down) => {
-                    // bring up first.
-                    down.up().await?
-                }
-            };
+            let up = pool.into_up().await?;
 
             let usage = up.usage().await?;
 
-            let pool = if up.volumes().await?.len() == 0 {
-                Pool::Down(up.down().await?)
-            } else {
-                Pool::Up(up)
-            };
+            if up.volumes().await?.len() == 0 {
+                pool.into_down().await?;
+            }
 
             // todo: clean up hdd disks
 
@@ -292,7 +283,7 @@ mod test {
         }
 
         /// limit, set, update, or remove size limit of the volume
-        async fn limit(&self, size: Option<Unit>) -> Result<()> {
+        async fn limit(&self, _size: Option<Unit>) -> Result<()> {
             unimplemented!()
         }
 
@@ -309,7 +300,7 @@ mod test {
             &self.name
         }
 
-        async fn up(self) -> Result<Self::UpPool> {
+        async fn up(self) -> std::result::Result<Self::UpPool, UpError<Self>> {
             Ok(self.up)
         }
     }
@@ -344,7 +335,7 @@ mod test {
         }
 
         /// down bring the pool down and return a DownPool
-        async fn down(self) -> Result<Self::DownPool> {
+        async fn down(self) -> std::result::Result<Self::DownPool, DownError<Self>> {
             Ok(TestDownPool {
                 name: self.name.clone(),
                 up: self,
@@ -414,7 +405,6 @@ mod test {
     async fn manager_initialize_basic() {
         use crate::storage::device::test::*;
         use crate::storage::device::DeviceType;
-        simple_logger::init_utc().unwrap();
 
         let p1_dev: PathBuf = "/dev/test1".into();
         let p1_label: String = "pool-1".into();
@@ -538,7 +528,6 @@ mod test {
     async fn manager_vol_delete() {
         use crate::storage::device::test::*;
         use crate::storage::device::DeviceType;
-        simple_logger::init_utc().unwrap();
 
         let p1_dev: PathBuf = "/dev/test1".into();
         let p1_label: String = "pool-1".into();

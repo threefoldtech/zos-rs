@@ -121,6 +121,26 @@ where
     fn new(utils: Arc<BtrfsUtils<E>>, sys: S, device: D) -> Self {
         Self { utils, sys, device }
     }
+
+    async fn up_impl(&self) -> Result<PathBuf> {
+        let path =
+            Path::new(MNT).join(self.device.label().ok_or_else(|| Error::InvalidDevice {
+                device: self.device.path().into(),
+                reason: InvalidDevice::InvalidLabel,
+            })?);
+
+        self.sys.mount(
+            Some(self.device.path()),
+            &path,
+            Option::<&str>::None,
+            nix::mount::MsFlags::empty(),
+            Option::<&str>::None,
+        )?;
+
+        self.utils.qgroup_enable(&path).await?;
+
+        Ok(path)
+    }
 }
 
 #[async_trait::async_trait]
@@ -137,24 +157,15 @@ where
         &self.device.label().unwrap()
     }
 
-    async fn up(mut self) -> Result<Self::UpPool> {
+    async fn up(mut self) -> std::result::Result<Self::UpPool, super::UpError<Self>> {
         // mount the device and return the proper UpPool
-        let path =
-            Path::new(MNT).join(self.device.label().ok_or_else(|| Error::InvalidDevice {
-                device: self.device.path().into(),
-                reason: InvalidDevice::InvalidLabel,
-            })?);
-
-        self.sys.mount(
-            Some(self.device.path()),
-            &path,
-            Option::<&str>::None,
-            nix::mount::MsFlags::empty(),
-            Option::<&str>::None,
-        )?;
-
-        self.utils.qgroup_enable(&path).await?;
-        Ok(BtrfsUpPool::new(self.utils, self.sys, path, self.device))
+        match self.up_impl().await {
+            Ok(path) => Ok(BtrfsUpPool::new(self.utils, self.sys, path, self.device)),
+            Err(err) => Err(super::UpError {
+                pool: self,
+                error: err,
+            }),
+        }
     }
 }
 
@@ -224,9 +235,14 @@ where
         })
     }
 
-    async fn down(mut self) -> Result<Self::DownPool> {
-        self.sys.umount(&self.path, None)?;
-        Ok(BtrfsDownPool::new(self.utils, self.sys, self.device))
+    async fn down(mut self) -> std::result::Result<Self::DownPool, super::DownError<Self>> {
+        match self.sys.umount(&self.path, None) {
+            Ok(_) => Ok(BtrfsDownPool::new(self.utils, self.sys, self.device)),
+            Err(err) => Err(super::DownError {
+                pool: self,
+                error: err.into(),
+            }),
+        }
     }
 
     async fn volumes(&self) -> Result<Vec<Self::Volume>> {
