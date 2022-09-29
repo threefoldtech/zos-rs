@@ -1,5 +1,5 @@
 mod db;
-mod mounts;
+mod mount;
 /// implementation of the flist daemon
 mod volume_allocator;
 use crate::bus::api::Flist;
@@ -9,10 +9,14 @@ use crate::bus::types::storage::MountOptions;
 use crate::system::Executor;
 use crate::system::Syscalls;
 
+use anyhow::bail;
 use anyhow::Result;
+use std::io::ErrorKind;
+use std::path::Path;
 use std::path::PathBuf;
+use tokio::fs;
 
-use self::db::MetadataDbMgr;
+use self::mount::MountManager;
 use self::volume_allocator::VolumeAllocator;
 
 pub struct FListDaemon<A, S, E>
@@ -21,13 +25,12 @@ where
     S: Syscalls,
     E: Executor + Sync + Send,
 {
-    db: MetadataDbMgr<A, S, E>,
+    mount_mgr: MountManager<A, S, E>,
 }
-
 impl<A, S, E> FListDaemon<A, S, E>
 where
-    A: VolumeAllocator,
-    S: Syscalls,
+    A: VolumeAllocator + Sync + Send,
+    S: Syscalls + Sync + Send,
     E: Executor + Sync + Send,
 {
     pub async fn new<R: Into<PathBuf>>(
@@ -42,8 +45,8 @@ where
         S: Syscalls,
         E: Executor,
     {
-        let db = db::MetadataDbMgr::new(root, syscalls, storage, executor).await?;
-        Ok(Self { db })
+        let mount_mgr = mount::MountManager::new(root, syscalls, storage, executor).await?;
+        Ok(Self { mount_mgr })
     }
 }
 
@@ -55,42 +58,76 @@ where
     E: Executor + Sync + Send,
 {
     async fn mount(&self, name: String, url: String, opts: MountOptions) -> Result<PathBuf> {
-        let mountpoint = self.db.mountpath(&name)?;
-        if self.db.is_mounted(&mountpoint).await {
+        let mountpoint = self.mount_mgr.mountpath(&name)?;
+        if self.mount_mgr.is_mounted(&mountpoint).await {
             return Ok(mountpoint);
         }
-        self.db.valid(&mountpoint).await?;
+        self.mount_mgr.valid(&mountpoint).await?;
         // let ro = self.mount_ro(&url, opts.storage.clone()).await?;
-        let ro_mount_path = self.db.mount_ro(&url, opts.storage.clone()).await?;
+        let ro_mount_path = self.mount_mgr.mount_ro(&url, opts.storage.clone()).await?;
         match &opts.mode {
             MountMode::ReadOnly => {
-                self.db.mount_bind(ro_mount_path, &mountpoint).await?;
+                self.mount_mgr
+                    .mount_bind(ro_mount_path, &mountpoint)
+                    .await?;
             }
             MountMode::ReadWrite(_) => {
-                self.db
+                self.mount_mgr
                     .mount_overlay(name, ro_mount_path, &mountpoint, &opts)
                     .await?;
             }
         }
-        self.db.clean_unused_mounts().await?;
+        self.mount_mgr.clean_unused_mounts().await?;
         Ok(mountpoint)
     }
 
     async fn unmount(&self, name: String) -> Result<()> {
-        self.db.unmount(&name).await?;
-        self.db.clean_unused_mounts().await
+        let mountpoint = self.mount_mgr.mountpath(&name)?;
+        if let Err(err) = self.mount_mgr.valid(&mountpoint).await {
+            match err.kind() {
+                ErrorKind::AlreadyExists => self.mount_mgr.syscalls.umount(&mountpoint, None)?,
+                _ => {}
+            }
+        }
+        fs::remove_dir_all(&mountpoint).await?;
+        self.mount_mgr.storage.delete(&name)?;
+        self.mount_mgr.clean_unused_mounts().await
     }
 
     async fn update(&self, name: String, size: crate::Unit) -> Result<PathBuf> {
-        let mountpoint = self.db.update(&name, size).await?;
+        let mountpoint = self.mount_mgr.mountpath(&name)?;
+        if !self.mount_mgr.is_mounted(&mountpoint).await {
+            bail!("failed to update mountpoint is invalid")
+        }
+        self.mount_mgr.storage.update(&name, size)?;
         Ok(mountpoint)
     }
     // returns the hash of the given flist name
     async fn hash_of_mount(&self, name: String) -> Result<String> {
-        self.db.hash_of_mount(name).await
+        let mountpoint = self.mount_mgr.mountpath(&name)?;
+        let info = self.mount_mgr.resolve(&mountpoint).await?;
+        let path = Path::new("/proc")
+            .join(info.pid.to_string())
+            .join("cmdline");
+
+        let cmdline = fs::read_to_string(path).await?;
+
+        let parts = cmdline.split("\0");
+        for part in parts {
+            let path = Path::new(&part);
+            if path.starts_with(&self.mount_mgr.flist) {
+                match path.file_name() {
+                    Some(filename) => return Ok(filename.to_string_lossy().to_string()),
+                    None => bail!("Failed to get hash for this mount"),
+                }
+            }
+        }
+        bail!("failed to get hash for this mount")
     }
 
     async fn exists(&self, name: String) -> Result<bool> {
-        self.db.exists(name).await
+        let mountpoint = self.mount_mgr.mountpath(name)?;
+        self.mount_mgr.valid(&mountpoint).await?;
+        return Ok(true);
     }
 }
