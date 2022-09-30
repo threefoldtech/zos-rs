@@ -1,4 +1,5 @@
 use super::pool;
+use super::pool::State;
 use super::Result;
 use super::VolumeInfo;
 use crate::cache::Store;
@@ -24,8 +25,8 @@ where
 {
     device_mgr: M,
     pool_mgr: P,
-    ssds: HashMap<String, Pool<U, D>>,
-    hdds: HashMap<String, Pool<U, D>>,
+    ssds: Vec<Pool<U, D>>,
+    hdds: Vec<Pool<U, D>>,
     cache: Store<DeviceType>,
     ssd_size: Unit,
     hdd_size: Unit,
@@ -42,8 +43,8 @@ where
         let mut this = Self {
             device_mgr,
             pool_mgr,
-            ssds: HashMap::default(),
-            hdds: HashMap::default(),
+            ssds: Vec::default(),
+            hdds: Vec::default(),
             cache: Store::new("storage", 1 * crate::MEGABYTE)
                 .await
                 .context("failed to initialize storage disk type cache")?,
@@ -158,11 +159,11 @@ where
             match device_typ {
                 DeviceType::SSD => {
                     self.ssd_size += usage.size;
-                    self.ssds.insert(pool.name().into(), pool);
+                    self.ssds.push(pool);
                 }
                 DeviceType::HDD => {
                     self.hdd_size += usage.size;
-                    self.hdds.insert(pool.name().into(), pool);
+                    self.hdds.push(pool);
                 }
             };
         }
@@ -171,6 +172,47 @@ where
         // are actually in up state.
         // hence finding, and/or mounting zos-cache
         Ok(())
+    }
+
+    // find an pool with free size. possibly bringing some pools up.
+    async fn allocate(&mut self, size: Unit) -> Result<&U> {
+        let mut index = None;
+        for (i, pool) in self.ssds.iter().enumerate() {
+            let up = match pool {
+                Pool::Up(up) => up,
+                _ => continue,
+            };
+
+            let usage = up.usage().await?;
+            if usage.enough_for(size) {
+                index = Some(i);
+                break;
+            }
+        }
+
+        if let Some(i) = index {
+            return Ok(self.ssds[i].as_up());
+        }
+
+        // if we reach here then there is no space left in up pools
+        // hence down pools need to be tried out.
+        for pool in self.ssds.iter_mut() {
+            if pool.size() < size || pool.state() == State::Up {
+                continue;
+            }
+
+            let up = match pool.into_up().await {
+                Ok(up) => up,
+                Err(err) => {
+                    log::error!("failed to bring pool up: {}", err);
+                    continue;
+                }
+            };
+
+            return Ok(up);
+        }
+
+        Err(super::Error::NoEnoughSpaceLeft)
     }
 }
 
@@ -184,7 +226,7 @@ where
 {
     async fn volumes(&self) -> Result<Vec<VolumeInfo>> {
         let mut volumes = vec![];
-        for (_, pool) in self.ssds.iter() {
+        for pool in self.ssds.iter() {
             let up = match pool {
                 Pool::Up(up) => up,
                 _ => continue,
@@ -197,7 +239,7 @@ where
     }
 
     async fn volume_lookup<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<VolumeInfo> {
-        for (_, pool) in self.ssds.iter() {
+        for pool in self.ssds.iter() {
             let up = match pool {
                 Pool::Up(ref up) => up,
                 _ => continue,
@@ -221,8 +263,30 @@ where
         })
     }
 
+    async fn volume_create<S: AsRef<str> + Send + Sync>(
+        &mut self,
+        name: S,
+        size: Unit,
+    ) -> Result<VolumeInfo> {
+        if size == 0 {
+            return Err(super::Error::InvalidSize { size });
+        }
+
+        match self.volume_lookup(&name).await {
+            Ok(volume) => return Ok(volume),
+            Err(super::Error::NotFound { .. }) => (),
+            Err(err) => return Err(err),
+        };
+
+        let pool = self.allocate(size).await?;
+        let vol = pool.volume_create(name).await?;
+        vol.limit(Some(size)).await?;
+
+        Ok((&vol).into())
+    }
+
     async fn volume_delete<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<()> {
-        for (_, pool) in self.ssds.iter() {
+        for pool in self.ssds.iter() {
             let up = match pool {
                 Pool::Up(up) => up,
                 _ => continue,
@@ -268,6 +332,7 @@ mod test {
     struct TestDownPool {
         pub name: String,
         pub up: TestUpPool,
+        pub size: Unit,
     }
 
     #[derive(Clone, Default)]
@@ -313,6 +378,10 @@ mod test {
             &self.name
         }
 
+        fn size(&self) -> Unit {
+            self.size
+        }
+
         async fn up(self) -> std::result::Result<Self::UpPool, UpError<Self>> {
             Ok(self.up)
         }
@@ -331,6 +400,10 @@ mod test {
         /// name of the pool
         fn name(&self) -> &str {
             &self.name
+        }
+
+        fn size(&self) -> Unit {
+            self.size
         }
 
         /// usage of the pool
@@ -352,6 +425,7 @@ mod test {
             Ok(TestDownPool {
                 name: self.name.clone(),
                 up: self,
+                size: 1 * crate::TERABYTE,
             })
         }
 
@@ -460,6 +534,7 @@ mod test {
             p1_dev.clone(),
             Pool::Down(TestDownPool {
                 name: p1_label.clone(),
+                size: 1 * crate::TERABYTE,
                 up: TestUpPool {
                     name: p1_label.clone(),
                     path: Path::new("/mnt").join(p1_label),
@@ -473,6 +548,7 @@ mod test {
             p2_dev.clone(),
             Pool::Down(TestDownPool {
                 name: p2_label.clone(),
+                size: 1 * crate::TERABYTE,
                 up: TestUpPool {
                     name: p2_label.clone(),
                     path: Path::new("/mnt").join(&p2_label),
@@ -494,6 +570,7 @@ mod test {
             p3_dev.clone(),
             Pool::Down(TestDownPool {
                 name: p3_label.clone(),
+                size: 4 * crate::TERABYTE,
                 up: TestUpPool {
                     name: p3_label.clone(),
                     path: Path::new("/mnt").join(p3_label),
@@ -512,10 +589,20 @@ mod test {
         assert_eq!(mgr.ssd_size, 2 * crate::TERABYTE);
         assert_eq!(mgr.hdd_size, 4 * crate::TERABYTE);
 
-        let pool_1 = &mgr.ssds["pool-1"];
+        let pool_1 = &mgr
+            .ssds
+            .iter()
+            .filter(|p| p.name() == "pool-1")
+            .next()
+            .unwrap();
         assert_eq!(pool_1.state(), State::Down);
 
-        let pool_2 = &mgr.ssds["pool-2"];
+        let pool_2 = &mgr
+            .ssds
+            .iter()
+            .filter(|p| p.name() == "pool-2")
+            .next()
+            .unwrap();
         assert_eq!(pool_2.state(), State::Up);
 
         let volumes = mgr.volumes().await.unwrap();
@@ -561,6 +648,7 @@ mod test {
             p1_dev.clone(),
             Pool::Down(TestDownPool {
                 name: p1_label.clone(),
+                size: 1 * crate::TERABYTE,
                 up: TestUpPool {
                     name: p1_label.clone(),
                     path: Path::new("/mnt").join(p1_label.clone()),
@@ -585,7 +673,12 @@ mod test {
         assert_eq!(mgr.ssds.len(), 1);
         assert_eq!(mgr.ssd_size, 1 * crate::TERABYTE);
 
-        let pool_1 = &mgr.ssds["pool-1"];
+        let pool_1 = &mgr
+            .ssds
+            .iter()
+            .filter(|p| p.name() == "pool-1")
+            .next()
+            .unwrap();
         assert_eq!(pool_1.state(), State::Up);
 
         // find volume by name.

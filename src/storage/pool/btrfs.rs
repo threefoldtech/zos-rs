@@ -157,6 +157,10 @@ where
         &self.device.label().unwrap()
     }
 
+    fn size(&self) -> Unit {
+        self.device.size()
+    }
+
     async fn up(mut self) -> std::result::Result<Self::UpPool, super::UpError<Self>> {
         // mount the device and return the proper UpPool
         match self.up_impl().await {
@@ -214,6 +218,10 @@ where
     fn name(&self) -> &str {
         // if we are at this state so device MUST have a label so it's safe to do this
         &self.device.label().unwrap()
+    }
+
+    fn size(&self) -> Unit {
+        self.device.size()
     }
 
     async fn usage(&self) -> Result<Usage> {

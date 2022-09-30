@@ -165,6 +165,8 @@ pub trait UpPool: Sized + Send + Sync {
     /// name of the pool
     fn name(&self) -> &str;
 
+    fn size(&self) -> Unit;
+
     /// usage of the pool
     async fn usage(&self) -> Result<Usage>;
 
@@ -188,6 +190,8 @@ pub trait DownPool: Sized + Send + Sync {
     async fn up(self) -> std::result::Result<Self::UpPool, UpError<Self>>;
 
     fn name(&self) -> &str;
+
+    fn size(&self) -> Unit;
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -221,6 +225,14 @@ where
         match self {
             Self::Up(up) => up.name(),
             Self::Down(down) => down.name(),
+            Self::Transit => unreachable!(),
+        }
+    }
+
+    pub fn size(&self) -> Unit {
+        match self {
+            Self::Up(up) => up.size(),
+            Self::Down(down) => down.size(),
             Self::Transit => unreachable!(),
         }
     }

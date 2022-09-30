@@ -30,6 +30,12 @@ pub enum Error {
     #[error("object {kind}({id}) not found")]
     NotFound { id: String, kind: Kind },
 
+    #[error("no enough space left on devices")]
+    NoEnoughSpaceLeft,
+
+    #[error("invalid size cannot be '{size}'")]
+    InvalidSize { size: Unit },
+
     #[error("{0}")]
     PoolError(#[from] pool::Error),
 
@@ -45,6 +51,14 @@ pub struct Usage {
     pub used: Unit,
 }
 
+impl Usage {
+    // enough for return true if requested size can fit
+    // inside this device. basically means that
+    // self.used + size <= self.size
+    pub fn enough_for(&self, size: Unit) -> bool {
+        self.used + size < self.size
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VolumeInfo {
     pub name: String,
@@ -69,6 +83,12 @@ pub trait Manager {
     async fn volumes(&self) -> Result<Vec<VolumeInfo>>;
     /// look up volume by name
     async fn volume_lookup<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<VolumeInfo>;
+    /// create a new volume with given size
+    async fn volume_create<S: AsRef<str> + Send + Sync>(
+        &mut self,
+        name: S,
+        size: Unit,
+    ) -> Result<VolumeInfo>;
     /// delete volume by name. If volume not found, return Ok
     async fn volume_delete<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<()>;
 }
