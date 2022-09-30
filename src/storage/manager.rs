@@ -108,6 +108,18 @@ where
     //     Ok(())
     // }
 
+    async fn validate(&self, pool: &mut Pool<U, D>) -> Result<super::Usage> {
+        let up = pool.into_up().await?;
+
+        let usage = up.usage().await?;
+
+        if up.volumes().await?.len() == 0 {
+            pool.into_down().await?;
+        }
+
+        Ok(usage)
+    }
+
     async fn initialize(&mut self) -> Result<()> {
         let devices = self.device_mgr.devices().await?;
         for device in devices {
@@ -132,16 +144,17 @@ where
                 }
             };
 
-            let up = pool.into_up().await?;
-
-            let usage = up.usage().await?;
-
-            if up.volumes().await?.len() == 0 {
-                pool.into_down().await?;
-            }
+            let usage = match self.validate(&mut pool).await {
+                Ok(usage) => usage,
+                Err(err) => {
+                    // invalid pool
+                    log::error!("failed to validate pool '{}': {}", pool.name(), err);
+                    // add to broken pools list.
+                    continue;
+                }
+            };
 
             // todo: clean up hdd disks
-
             match device_typ {
                 DeviceType::SSD => {
                     self.ssd_size += usage.size;
