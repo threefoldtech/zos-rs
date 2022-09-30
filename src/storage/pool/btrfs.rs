@@ -74,7 +74,7 @@ where
         self.utils.qgroup_limit(&self.path, size).await
     }
 
-    async fn usage(&self) -> Result<Usage> {
+    async fn usage(&self) -> Result<Unit> {
         let qgroup = self
             .utils
             .qgroup_list(&self.path)
@@ -94,10 +94,7 @@ where
                 .context("failed to calculate volume size")?, //TODO: scan all files sizes
         };
 
-        Ok(Usage {
-            used: used,
-            size: qgroup.max_rfer.unwrap_or(0),
-        })
+        Ok(used)
     }
 }
 
@@ -233,8 +230,7 @@ where
         // volumes and the groups, then just match and calculate once.
         // todo!
         for volume in self.volumes().await? {
-            let usage = volume.usage().await?;
-            used += usage.used;
+            used += volume.usage().await?;
         }
 
         Ok(Usage {
@@ -732,8 +728,7 @@ mod test {
         assert_eq!(cache.path(), Path::new("/mnt/test-device/zos-cache"));
 
         let usage = cache.usage().await.unwrap();
-        assert_eq!(usage.size, 100 * crate::GIGABYTE);
-        assert_eq!(usage.used, 100 * crate::GIGABYTE);
+        assert_eq!(usage, 100 * crate::GIGABYTE);
     }
 
     #[test]

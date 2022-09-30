@@ -144,10 +144,10 @@ pub trait Volume: Send + Sync {
     /// limit, set, update, or remove size limit of the volume
     async fn limit(&self, size: Option<Unit>) -> Result<()>;
 
-    /// usage return size reserved or allocated by a volume
-    /// usually if limit is set, the limit is returned as usage
-    /// if no limit set, actual files size will be returned
-    async fn usage(&self) -> Result<Usage>;
+    /// usage return volume limit size (quota). If no quota
+    /// set the actual disk usage (by files in the volume) is
+    /// returned
+    async fn usage(&self) -> Result<Unit>;
 }
 
 /// UpPool is trait for a pool that is hooked to the system and accessible

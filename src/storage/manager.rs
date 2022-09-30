@@ -340,7 +340,7 @@ mod test {
         pub id: u64,
         pub path: PathBuf,
         pub name: String,
-        pub usage: Usage,
+        pub usage: Unit,
     }
 
     #[async_trait::async_trait]
@@ -362,11 +362,11 @@ mod test {
 
         /// limit, set, update, or remove size limit of the volume
         async fn limit(&self, _size: Option<Unit>) -> Result<()> {
-            unimplemented!()
+            Ok(())
         }
 
-        async fn usage(&self) -> Result<Usage> {
-            Ok(self.usage.clone())
+        async fn usage(&self) -> Result<Unit> {
+            Ok(self.usage)
         }
     }
 
@@ -411,7 +411,7 @@ mod test {
             let mut used = 0;
             let vols = self.volumes.lock().await;
             for vol in vols.iter() {
-                used += vol.usage().await?.used;
+                used += vol.usage().await?;
             }
 
             Ok(Usage {
@@ -557,10 +557,7 @@ mod test {
                         id: 0,
                         name: "zos-cache".into(),
                         path: Path::new("/mnt").join(p2_label).join("zos-cache"),
-                        usage: Usage {
-                            size: 100 * crate::GIGABYTE,
-                            used: 100 * crate::GIGABYTE,
-                        },
+                        usage: 100 * crate::GIGABYTE,
                     }])),
                 },
             }),
@@ -625,6 +622,215 @@ mod test {
     }
 
     #[tokio::test]
+    async fn manager_vol_create_space_available() {
+        // there are 2 pools, one of them is up (because the pool has volumes)
+        // on allocation, the up pool is used because it already has enough space
+
+        use crate::storage::device::test::*;
+        use crate::storage::device::DeviceType;
+
+        let p1_dev: PathBuf = "/dev/test1".into();
+        let p1_label: String = "pool-1".into();
+
+        let p2_dev: PathBuf = "/dev/test2".into();
+        let p2_label: String = "pool-2".into();
+
+        let blk = TestManager {
+            devices: vec![
+                TestDevice {
+                    path: p1_dev.clone(),
+                    device_type: DeviceType::SSD,
+                    filesystem: Some("test".into()),
+                    label: Some(p1_label.clone()),
+                    size: 1 * crate::TERABYTE,
+                },
+                TestDevice {
+                    path: p2_dev.clone(),
+                    device_type: DeviceType::SSD,
+                    filesystem: Some("test".into()),
+                    label: Some(p2_label.clone()),
+                    size: 1 * crate::TERABYTE,
+                },
+            ],
+        };
+
+        // map devices to pools
+        let mut pool_manager = TestPoolManager::default();
+        pool_manager.map.insert(
+            p1_dev.clone(),
+            Pool::Down(TestDownPool {
+                name: p1_label.clone(),
+                size: 1 * crate::TERABYTE,
+                up: TestUpPool {
+                    name: p1_label.clone(),
+                    path: Path::new("/mnt").join(p1_label),
+                    size: 1 * crate::TERABYTE,
+                    volumes: Arc::default(),
+                },
+            }),
+        );
+
+        pool_manager.map.insert(
+            p2_dev.clone(),
+            Pool::Down(TestDownPool {
+                name: p2_label.clone(),
+                size: 1 * crate::TERABYTE,
+                up: TestUpPool {
+                    name: p2_label.clone(),
+                    path: Path::new("/mnt").join(&p2_label),
+                    size: 1 * crate::TERABYTE,
+                    volumes: Arc::new(Mutex::new(vec![TestVolume {
+                        id: 0,
+                        name: "zos-cache".into(),
+                        path: Path::new("/mnt").join(p2_label).join("zos-cache"),
+                        usage: 100 * crate::GIGABYTE,
+                    }])),
+                },
+            }),
+        );
+
+        let mut mgr = StorageManager::new(blk, pool_manager)
+            .await
+            .expect("manager failed to create");
+
+        assert_eq!(mgr.ssds.len(), 2);
+        assert_eq!(mgr.ssd_size, 2 * crate::TERABYTE);
+
+        let vol = mgr
+            .volume_create("vdisks", 20 * crate::GIGABYTE)
+            .await
+            .unwrap();
+        assert_eq!(vol.name, "vdisks");
+        assert_eq!(vol.path, Path::new("/mnt/pool-2/vdisks"));
+    }
+
+    #[tokio::test]
+    async fn manager_vol_create_space_unavailable() {
+        // there are 2 pools, one of them is up (because the pool has volumes)
+        // on allocation but it's full, the other down pool is brought up instead
+
+        use crate::storage::device::test::*;
+        use crate::storage::device::DeviceType;
+
+        let p1_dev: PathBuf = "/dev/test1".into();
+        let p1_label: String = "pool-1".into();
+
+        let p2_dev: PathBuf = "/dev/test2".into();
+        let p2_label: String = "pool-2".into();
+
+        let blk = TestManager {
+            devices: vec![
+                TestDevice {
+                    path: p1_dev.clone(),
+                    device_type: DeviceType::SSD,
+                    filesystem: Some("test".into()),
+                    label: Some(p1_label.clone()),
+                    size: 1 * crate::TERABYTE,
+                },
+                TestDevice {
+                    path: p2_dev.clone(),
+                    device_type: DeviceType::SSD,
+                    filesystem: Some("test".into()),
+                    label: Some(p2_label.clone()),
+                    size: 1 * crate::TERABYTE,
+                },
+            ],
+        };
+
+        // map devices to pools
+        let mut pool_manager = TestPoolManager::default();
+        pool_manager.map.insert(
+            p1_dev.clone(),
+            Pool::Down(TestDownPool {
+                name: p1_label.clone(),
+                size: 1 * crate::TERABYTE,
+                up: TestUpPool {
+                    name: p1_label.clone(),
+                    path: Path::new("/mnt").join(&p1_label),
+                    size: 1 * crate::TERABYTE,
+                    volumes: Arc::default(),
+                },
+            }),
+        );
+
+        pool_manager.map.insert(
+            p2_dev.clone(),
+            Pool::Down(TestDownPool {
+                name: p2_label.clone(),
+                size: 1 * crate::TERABYTE,
+                up: TestUpPool {
+                    name: p2_label.clone(),
+                    path: Path::new("/mnt").join(&p2_label),
+                    size: 1 * crate::TERABYTE,
+                    volumes: Arc::new(Mutex::new(vec![TestVolume {
+                        id: 0,
+                        name: "zos-cache".into(),
+                        path: Path::new("/mnt").join(&p2_label).join("zos-cache"),
+                        usage: 1 * crate::TERABYTE,
+                    }])),
+                },
+            }),
+        );
+
+        let mut mgr = StorageManager::new(blk, pool_manager)
+            .await
+            .expect("manager failed to create");
+
+        assert_eq!(
+            mgr.ssds
+                .iter()
+                .filter(|p| p.name() == &p1_label)
+                .next()
+                .unwrap()
+                .state(),
+            State::Down
+        );
+
+        assert_eq!(
+            mgr.ssds
+                .iter()
+                .filter(|p| p.name() == &p2_label)
+                .next()
+                .unwrap()
+                .state(),
+            State::Up
+        );
+
+        assert_eq!(mgr.ssds.len(), 2);
+        assert_eq!(mgr.ssd_size, 2 * crate::TERABYTE);
+
+        let vol = mgr
+            .volume_create("vdisks", 20 * crate::GIGABYTE)
+            .await
+            .unwrap();
+        assert_eq!(vol.name, "vdisks");
+        assert_eq!(vol.path, Path::new("/mnt/pool-1/vdisks"));
+
+        let volumes = mgr.volumes().await.unwrap();
+        assert_eq!(volumes.len(), 2);
+
+        assert_eq!(
+            mgr.ssds
+                .iter()
+                .filter(|p| p.name() == &p1_label)
+                .next()
+                .unwrap()
+                .state(),
+            State::Up
+        );
+
+        assert_eq!(
+            mgr.ssds
+                .iter()
+                .filter(|p| p.name() == &p2_label)
+                .next()
+                .unwrap()
+                .state(),
+            State::Up
+        );
+    }
+
+    #[tokio::test]
     async fn manager_vol_delete() {
         use crate::storage::device::test::*;
         use crate::storage::device::DeviceType;
@@ -657,10 +863,7 @@ mod test {
                         id: 0,
                         name: "zos-cache".into(),
                         path: Path::new("/mnt").join(p1_label).join("zos-cache"),
-                        usage: Usage {
-                            size: 100 * crate::GIGABYTE,
-                            used: 100 * crate::GIGABYTE,
-                        },
+                        usage: 100 * crate::GIGABYTE,
                     }])),
                 },
             }),
