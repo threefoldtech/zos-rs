@@ -2,17 +2,17 @@ use super::db::MetadataDbMgr;
 use super::volume_allocator::VolumeAllocator;
 use crate::bus::types::storage::{MountMode, MountOptions, WriteLayer};
 use crate::env;
+use crate::storage::{self, G8ufsInfo};
 use crate::system::{Command, Executor, Syscalls};
 use anyhow::{bail, Result};
-
-use crate::storage::{self, G8ufsInfo};
 use async_recursion::async_recursion;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{self, Error, ErrorKind};
+use std::io::{self};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::time;
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum FsType {
     G8UFS,
@@ -28,7 +28,7 @@ impl AsRef<str> for FsType {
         }
     }
 }
-
+// type MResult<T> = anyhow::Result<T, Error>;
 pub struct MountManager<A, S, E>
 where
     A: VolumeAllocator,
@@ -97,7 +97,7 @@ where
     }
     // returns ro path joined with flist hash
     // this where we mount the flist for read only
-    pub fn flist_ro_mount_path<R: AsRef<str>>(&self, hash: R) -> Result<PathBuf> {
+    fn flist_ro_mount_path<R: AsRef<str>>(&self, hash: R) -> Result<PathBuf> {
         let mountpath = self.ro.join(hash.as_ref());
         if mountpath.parent() != Some(self.ro.as_path()) {
             bail!("invalid mount name")
@@ -107,48 +107,24 @@ where
     }
     // Checks if the given path is mountpoint or not
     pub async fn is_mounted<P: AsRef<Path>>(&self, path: P) -> bool {
-        if let Some(path_str) = path.as_ref().as_os_str().to_str() {
-            let cmd = Command::new("mountpoint").arg(path_str);
-            return self.executor.run(&cmd).await.is_ok();
-        }
-        false
+        storage::mountpoint(path.as_ref()).await.is_ok()
     }
 
     // Checks is the given path is a valid mountpoint means:
     // it is either doesn't exist or
     // it is a dir and not a mountpoint for anything
-    pub async fn valid<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
+    pub async fn valid<P: AsRef<Path>>(&self, path: P) -> bool {
         match fs::metadata(&path).await {
-            Ok(info) => {
-                if !info.is_dir() {
-                    return Err(Error::new(
-                        ErrorKind::Other,
-                        format!("{} is not a directory", path.as_ref().display().to_string()),
-                    ));
-                }
-
-                if self.is_mounted(&path).await {
-                    return Err(Error::new(
-                        ErrorKind::AlreadyExists,
-                        format!("{} is already mounted", path.as_ref().display().to_string()),
-                    ));
-                } else {
-                    return Ok(());
-                }
+            Ok(info) => info.is_dir() && !self.is_mounted(&path).await,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => true,
+            Err(err) if err.kind() == io::ErrorKind::ConnectionAborted => {
+                matches!(self.syscalls.umount(path, None), Ok(_))
             }
-            Err(error) => match error.kind() {
-                io::ErrorKind::NotFound => return Ok(()),
-                // transport endpoint is not connected
-                io::ErrorKind::ConnectionAborted => match self.syscalls.umount(path, None) {
-                    Ok(_) => return Ok(()),
-                    Err(_) => return Err(Error::new(ErrorKind::Other, "can not do unmount")),
-                },
-                _ => return Err(Error::new(ErrorKind::Other, "Failed to check mount point")),
-            },
-        };
+            _ => false,
+        }
     }
 
-    pub async fn wait_mountpoint<P: AsRef<Path>>(&self, path: P, seconds: u32) -> Result<()> {
+    async fn wait_mountpoint<P: AsRef<Path>>(&self, path: P, seconds: u32) -> Result<()> {
         let mut duration = seconds;
         while duration > 0 {
             time::sleep(time::Duration::from_secs(1)).await;
@@ -184,7 +160,9 @@ where
         if self.is_mounted(&ro_mountpoint).await {
             return Ok(ro_mountpoint);
         }
-        self.valid(&ro_mountpoint).await?;
+        if !self.valid(&ro_mountpoint).await {
+            bail!("invalid mountpoint {}", &ro_mountpoint.display())
+        }
 
         fs::create_dir_all(&ro_mountpoint).await?;
         let storage_url = match storage_url {
@@ -221,13 +199,17 @@ where
         mountpoint: T,
     ) -> Result<bool> {
         fs::create_dir_all(&mountpoint).await?;
-        if let Err(_) = self.syscalls.mount(
-            Some(ro_mount_path),
-            &mountpoint,
-            Some("bind"),
-            nix::mount::MsFlags::MS_BIND,
-            Option::<&str>::None,
-        ) {
+        if self
+            .syscalls
+            .mount(
+                Some(ro_mount_path),
+                &mountpoint,
+                Some("bind"),
+                nix::mount::MsFlags::MS_BIND,
+                Option::<&str>::None,
+            )
+            .is_err()
+        {
             if let Err(err) = self.syscalls.umount(&mountpoint, None) {
                 log::debug!(
                     "failed to unmount {}, Error: {}",
@@ -259,14 +241,13 @@ where
                     if limit == 0 {
                         bail!("invalid mount option, missing disk type");
                     }
-                    let path = match self.storage.create(&name, limit) {
+                    match self.storage.create(&name, limit) {
                         Ok(volume) => volume.path,
                         Err(e) => {
                             self.storage.delete(&name)?;
                             bail!(e)
                         }
-                    };
-                    path
+                    }
                 }
             };
             let rw = persistent.join("rw");
@@ -357,15 +338,15 @@ where
             Some(mount) => {
                 if mount.filesystem == FsType::G8UFS.as_ref() {
                     let g8ufsinfo = mount.as_g8ufs()?;
-                    return Ok(g8ufsinfo);
+                    Ok(g8ufsinfo)
                 } else if mount.filesystem == FsType::Overlay.as_ref() {
                     let overlay = mount.as_overlay()?;
-                    return self.resolve(&overlay.lower_dir).await;
+                    self.resolve(&overlay.lower_dir).await
                 } else {
                     bail!("invalid mount fs type {}", mount.filesystem)
                 }
             }
             None => bail!("failed to get mount info"),
-        };
+        }
     }
 }

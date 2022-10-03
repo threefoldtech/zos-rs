@@ -1,6 +1,6 @@
+/// implementation of the flist daemon
 mod db;
 mod mount;
-/// implementation of the flist daemon
 mod volume_allocator;
 use crate::bus::api::Flist;
 use crate::bus::types::storage::MountMode;
@@ -11,7 +11,6 @@ use crate::system::Syscalls;
 
 use anyhow::bail;
 use anyhow::Result;
-use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::fs;
@@ -62,8 +61,9 @@ where
         if self.mount_mgr.is_mounted(&mountpoint).await {
             return Ok(mountpoint);
         }
-        self.mount_mgr.valid(&mountpoint).await?;
-        // let ro = self.mount_ro(&url, opts.storage.clone()).await?;
+        if !self.mount_mgr.valid(&mountpoint).await {
+            bail!("invalid mountpoint {}", &mountpoint.display())
+        }
         let ro_mount_path = self.mount_mgr.mount_ro(&url, opts.storage.clone()).await?;
         match &opts.mode {
             MountMode::ReadOnly => {
@@ -83,12 +83,10 @@ where
 
     async fn unmount(&self, name: String) -> Result<()> {
         let mountpoint = self.mount_mgr.mountpath(&name)?;
-        if let Err(err) = self.mount_mgr.valid(&mountpoint).await {
-            match err.kind() {
-                ErrorKind::AlreadyExists => self.mount_mgr.syscalls.umount(&mountpoint, None)?,
-                _ => {}
-            }
+        if self.mount_mgr.is_mounted(&mountpoint).await {
+            self.mount_mgr.syscalls.umount(&mountpoint, None)?
         }
+
         fs::remove_dir_all(&mountpoint).await?;
         self.mount_mgr.storage.delete(&name)?;
         self.mount_mgr.clean_unused_mounts().await
@@ -112,7 +110,7 @@ where
 
         let cmdline = fs::read_to_string(path).await?;
 
-        let parts = cmdline.split("\0");
+        let parts = cmdline.split('\0');
         for part in parts {
             let path = Path::new(&part);
             if path.starts_with(&self.mount_mgr.flist) {
@@ -127,7 +125,6 @@ where
 
     async fn exists(&self, name: String) -> Result<bool> {
         let mountpoint = self.mount_mgr.mountpath(name)?;
-        self.mount_mgr.valid(&mountpoint).await?;
-        return Ok(true);
+        Ok(self.mount_mgr.is_mounted(&mountpoint).await)
     }
 }
