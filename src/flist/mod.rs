@@ -100,6 +100,7 @@ where
         self.mount_mgr.storage.update(&name, size)?;
         Ok(mountpoint)
     }
+
     // returns the hash of the given flist name
     async fn hash_of_mount(&self, name: String) -> Result<String> {
         let mountpoint = self.mount_mgr.mountpath(&name)?;

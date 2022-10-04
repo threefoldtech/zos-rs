@@ -86,6 +86,7 @@ where
             db,
         })
     }
+
     // returns the mount path out of an flist name simplly joins /<FLISTS_ROOT>/<mountpoint>/<name>
     // this where this flist instance will be
     pub fn mountpath<T: AsRef<str>>(&self, name: T) -> Result<PathBuf> {
@@ -95,6 +96,7 @@ where
         }
         Ok(mountpath)
     }
+
     // returns ro path joined with flist hash
     // this where we mount the flist for read only
     fn flist_ro_mount_path<R: AsRef<str>>(&self, hash: R) -> Result<PathBuf> {
@@ -105,6 +107,7 @@ where
 
         Ok(mountpath)
     }
+
     // Checks if the given path is mountpoint or not
     pub async fn is_mounted<P: AsRef<Path>>(&self, path: P) -> bool {
         storage::mountpoint(path.as_ref()).await.is_ok()
@@ -136,6 +139,7 @@ where
 
         bail!("was not mounted in time")
     }
+
     // MountRO mounts an flist in read-only mode. This mount then can be shared between multiple rw mounts
     // TODO: how to know that this ro mount is no longer used, hence can be unmounted and cleaned up?
     // this mounts the downloaded flish under <FLISTS_ROOT>/ro/<FLIST_HASH>
@@ -192,6 +196,7 @@ where
         nix::unistd::sync();
         Ok(ro_mountpoint)
     }
+
     // Create bind mount for <FLISTS_ROOT>/ro/<FLIST_HASH> on <FLISTS_ROOT>/mountpoint/<name>
     pub async fn mount_bind<P: AsRef<Path>, T: AsRef<Path>>(
         &self,
@@ -272,6 +277,7 @@ where
         };
         Ok(())
     }
+
     pub async fn clean_unused_mounts(&self) -> Result<()> {
         let all = storage::mounts().await?;
         let mut ro_targets = HashMap::new();

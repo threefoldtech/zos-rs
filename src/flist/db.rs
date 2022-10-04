@@ -20,6 +20,7 @@ impl MetadataDbMgr {
             flist: flist.as_ref().into(),
         })
     }
+
     pub async fn get<T: AsRef<str>>(&self, url: T) -> Result<PathBuf> {
         let url = url.as_ref();
         let hash = self.hash_of_flist(url).await?;
@@ -33,23 +34,25 @@ impl MetadataDbMgr {
                     self.download_flist(url, &hash).await
                 }
             }
-            Err(error) => match error.kind() {
-                io::ErrorKind::NotFound => self.download_flist(url, &hash).await,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                self.download_flist(url, &hash).await
+            }
 
-                _ => bail!(
-                    "error reading flist file: {}, error {}",
-                    &path.display(),
-                    error
-                ),
-            },
+            Err(error) => bail!(
+                "error reading flist file: {}, error {}",
+                &path.display(),
+                error
+            ),
         }
     }
+
     fn compare_md5<T: AsRef<str>, P: AsRef<Path>>(&self, hash: T, path: P) -> bool {
         // create a Md5 hasher instance
         let calculated_hash =
             checksums::hash_file(path.as_ref(), checksums::Algorithm::MD5).to_lowercase();
         calculated_hash == hash.as_ref()
     }
+
     // downloadFlist downloads an flits from a URL
     // if the flist location also provide and md5 hash of the flist
     // this function will use it to avoid downloading an flist that is
