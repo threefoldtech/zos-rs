@@ -278,6 +278,15 @@ where
         self.utils.volume_delete(&self.path, name).await?;
         self.utils.qgroup_delete(&self.path, id).await
     }
+
+    async fn volume<N: AsRef<str> + Send + Sync>(&self, name: N) -> Result<Self::Volume> {
+        let id = self.utils.volume_id(&self.path, &name).await?;
+        Ok(BtrfsVolume::new(
+            Arc::clone(&self.utils),
+            id,
+            self.path.join(name.as_ref()),
+        ))
+    }
 }
 
 /// shorthand for a btrfs pool

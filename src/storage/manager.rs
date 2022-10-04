@@ -1,20 +1,17 @@
 use super::pool;
 use super::pool::State;
 use super::Result;
-use super::VolumeInfo;
+use super::{DiskInfo, VolumeInfo};
 use crate::cache::Store;
 use crate::storage::device::{DeviceManager, DeviceType};
 use crate::storage::pool::{DownPool, UpPool, Volume};
 use crate::Unit;
 use anyhow::Context;
-use std::collections::HashMap;
 
 use super::device::Device;
 use super::pool::{Pool, PoolManager};
 
-const FORCE_FORMAT: bool = false;
-const CACHE_VOLUME: &str = "zos-cache";
-const CACHE_TARGET: &str = "/var/cache";
+const VDISKS_VOLUME: &str = "vdisks";
 
 pub struct StorageManager<M, P, U, D>
 where
@@ -83,31 +80,6 @@ where
 
         Ok(t)
     }
-
-    // async fn ensure_cache(&self) -> Result<()> {
-    //     let mnt = super::mountpoint(CACHE_TARGET)
-    //         .await
-    //         .context("failed to check mount for cache")?;
-
-    //     if mnt.is_some() {
-    //         return Ok(());
-    //     }
-
-    //     let vol = match self.find_volume(CACHE_VOLUME).await? {
-    //         Some(vol) => vol,
-    //         None => unimplemented!(), // create a volume
-    //     };
-
-    //     System.mount(
-    //         Some(vol.path()),
-    //         CACHE_TARGET,
-    //         Option::<&str>::None,
-    //         MsFlags::MS_BIND,
-    //         Option::<&str>::None,
-    //     )?;
-
-    //     Ok(())
-    // }
 
     async fn validate(&self, pool: &mut Pool<U, D>) -> Result<super::Usage> {
         let up = pool.into_up().await?;
@@ -305,6 +277,46 @@ where
 
         Ok(())
     }
+
+    async fn disk_lookup<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<DiskInfo> {
+        for pool in self.ssds.iter() {
+            let up = match pool {
+                Pool::Up(up) => up,
+                _ => continue,
+            };
+
+            let vol: U::Volume = match up.volume(VDISKS_VOLUME).await {
+                Ok(vol) => vol,
+                Err(pool::Error::VolumeNotFound { .. }) => continue,
+                Err(err) => {
+                    log::error!("failed to list volumes from pool '{}': {}", up.name(), err);
+                    continue;
+                }
+            };
+
+            //todo: is it a safe path? beware of path injection like "../name"
+            let path = vol.path().join(name.as_ref());
+            if let Ok(meta) = tokio::fs::metadata(&path).await {
+                return Ok(DiskInfo {
+                    path: path,
+                    size: meta.len(),
+                });
+            }
+        }
+
+        Err(super::Error::NotFound {
+            kind: super::Kind::Disk,
+            id: name.as_ref().into(),
+        })
+    }
+
+    async fn disk_create<S: AsRef<str> + Send + Sync>(
+        &mut self,
+        name: S,
+        size: Unit,
+    ) -> Result<DiskInfo> {
+        unimplemented!()
+    }
 }
 
 #[cfg(test)]
@@ -452,6 +464,20 @@ mod test {
             Ok(vol)
         }
 
+        async fn volume<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<Self::Volume> {
+            match self
+                .volumes()
+                .await?
+                .into_iter()
+                .filter(|v| v.name() == name.as_ref())
+                .next()
+            {
+                Some(vol) => Ok(vol),
+                None => Err(Error::VolumeNotFound {
+                    volume: name.as_ref().into(),
+                }),
+            }
+        }
         /// list all volumes in the pool
         async fn volumes(&self) -> Result<Vec<Self::Volume>> {
             let v = self.volumes.lock().await;

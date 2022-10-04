@@ -181,6 +181,8 @@ pub trait UpPool: Sized + Send + Sync {
 
     /// delete volume pools
     async fn volume_delete<S: AsRef<str> + Send>(&self, name: S) -> Result<()>;
+
+    async fn volume<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<Self::Volume>;
 }
 
 #[async_trait::async_trait]

@@ -77,6 +77,12 @@ where
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiskInfo {
+    pub path: PathBuf,
+    pub size: Unit,
+}
+
 #[async_trait::async_trait]
 pub trait Manager {
     /// list all available volumes information
@@ -91,4 +97,13 @@ pub trait Manager {
     ) -> Result<VolumeInfo>;
     /// delete volume by name. If volume not found, return Ok
     async fn volume_delete<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<()>;
+
+    /// look up disk by name
+    async fn disk_lookup<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<DiskInfo>;
+
+    async fn disk_create<S: AsRef<str> + Send + Sync>(
+        &mut self,
+        name: S,
+        size: Unit,
+    ) -> Result<DiskInfo>;
 }
