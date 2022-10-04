@@ -1,11 +1,9 @@
 use super::db::MetadataDbMgr;
 use super::volume_allocator::VolumeAllocator;
-use crate::bus::types::storage::{MountMode, MountOptions, WriteLayer};
 use crate::env;
-use crate::storage::{self, G8ufsInfo};
+use crate::storage;
 use crate::system::{Command, Executor, Syscalls};
 use anyhow::{bail, Result};
-use async_recursion::async_recursion;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self};
@@ -228,91 +226,71 @@ where
         Ok(true)
     }
 
-    pub async fn mount_overlay<T: AsRef<str>, B: AsRef<Path>, C: AsRef<Path>>(
+    pub async fn mount_overlay<B: AsRef<Path>, C: AsRef<Path>, D: AsRef<Path>>(
         &self,
-        name: T,
         ro: B,
-        mountpoint: C,
-        opts: &MountOptions,
+        rw: C,
+        mountpoint: D,
     ) -> Result<()> where {
         fs::create_dir_all(&mountpoint).await?;
-        if let MountMode::ReadWrite(WriteLayer::Size(limit)) = opts.mode {
-            // no persisted volume provided, hence
-            // we need to create one, or find one that is already exists
-            let persistent = match self.storage.lookup(&name) {
-                Ok(volume) => volume.path,
-                Err(_) => {
-                    // Volume doesn't exist create a new one
-                    if limit == 0 {
-                        bail!("invalid mount option, missing disk type");
-                    }
-                    match self.storage.create(&name, limit) {
-                        Ok(volume) => volume.path,
-                        Err(e) => {
-                            self.storage.delete(&name)?;
-                            bail!(e)
-                        }
-                    }
-                }
-            };
-            let rw = persistent.join("rw");
-            let wd = persistent.join("wd");
-            let paths = vec![&rw, &wd];
-            for path in paths {
-                fs::create_dir_all(&path).await?;
-            }
-            let data = format!(
-                "lowerdir={},upperdir={},workdir={}",
-                ro.as_ref().display(),
-                &rw.display(),
-                &wd.display()
-            );
-            self.syscalls.mount(
-                Some("overlay"),
-                mountpoint,
-                Some("overlay"),
-                nix::mount::MsFlags::MS_NOATIME,
-                Some(&data),
-            )?;
-        };
+        let rw_dir = rw.as_ref().join("rw");
+        let work_dir = rw.as_ref().join("wd");
+        let paths = vec![&rw_dir, &work_dir];
+        for path in paths {
+            fs::create_dir_all(&path).await?;
+        }
+        let data = format!(
+            "lowerdir={},upperdir={},workdir={}",
+            ro.as_ref().display(),
+            &rw_dir.display(),
+            &work_dir.display()
+        );
+        self.syscalls.mount(
+            Some("overlay"),
+            mountpoint,
+            Some("overlay"),
+            nix::mount::MsFlags::MS_NOATIME,
+            Some(&data),
+        )?;
         Ok(())
     }
 
     pub async fn clean_unused_mounts(&self) -> Result<()> {
         let all = storage::mounts().await?;
         let mut ro_targets = HashMap::new();
-        // Get all flists managed by flist Daemony
+        // Get all flists managed by flist Daemon
         let ros = all
-            .clone()
-            .into_iter()
+            .iter()
             .filter(|mnt_info| Path::new(&mnt_info.target).starts_with(&self.root))
             .filter(|mnt_info| {
-                Path::new(&mnt_info.target).parent() == Some(&self.ro)
+                mnt_info.target.parent() == Some(&self.ro)
                     && mnt_info.filesystem == FsType::G8UFS.as_ref()
             });
 
         for mount in ros {
-            let g8ufs = mount.as_g8ufs()?;
-            ro_targets.insert(g8ufs.pid, mount);
+            let pid: i64 = mount.source.parse()?;
+            ro_targets.insert(pid, mount);
         }
 
         let all_under_mountpoints = all
-            .clone()
-            .into_iter()
-            .filter(|mount| Path::new(&mount.target).parent() == Some(&self.mountpoint));
+            .iter()
+            .filter(|mount| mount.target.parent() == Some(&self.mountpoint));
 
         for mount in all_under_mountpoints {
             let pid: i64;
             if mount.filesystem == FsType::G8UFS.as_ref() {
-                pid = mount.as_g8ufs()?.pid
+                pid = mount.source.parse()?
             } else if mount.filesystem == FsType::Overlay.as_ref() {
-                let lower_dir_path = mount.as_overlay()?.lower_dir;
+                // let lower_dir_path = mount.as_overlay()?.lower_dir;
+                let lower_dir = match mount.option("lowerdir") {
+                    Some(Some(lower_dir)) => lower_dir,
+                    _ => bail!("bad overlay options: lowerdir not found"),
+                };
                 let mut all_matching_overlay = all
-                    .clone()
-                    .into_iter()
-                    .filter(|mnt| Path::new(&lower_dir_path) == Path::new(&mnt.target));
+                    .iter()
+                    .filter(|mnt| PathBuf::from(lower_dir) == mnt.target);
                 pid = match all_matching_overlay.next() {
-                    Some(mount) => mount.as_g8ufs()?.pid,
+                    Some(mount) => mount.source.parse()?,
                     None => continue,
                 };
             } else {
@@ -320,39 +298,60 @@ where
             }
             ro_targets.remove(&pid);
         }
-        for (_, mount) in ro_targets.into_iter() {
-            log::debug!("cleaning up mount {:#?}", mount);
+        for (_, mount) in ro_targets.iter() {
+            log::debug!("cleaning up mount {}", &mount.target.display());
             if let Err(err) = self.syscalls.umount(&mount.target, None) {
-                log::debug!("failed to unmount {:#?} Error: {}", mount, err);
+                log::debug!(
+                    "failed to unmount {} Error: {}",
+                    mount.target.display(),
+                    err
+                );
                 continue;
             }
             if let Err(err) = fs::remove_dir_all(&mount.target).await {
-                log::debug!(
-                    "failed to remove dir {:#?} for mount {:#?} Error: {}",
-                    mount.target,
-                    mount,
-                    err
-                );
+                log::debug!("failed to remove dir {:#?}  Error: {}", mount.target, err);
             }
         }
         Ok(())
     }
-
-    #[async_recursion]
-    pub async fn resolve<T: AsRef<Path> + Send>(&self, path: T) -> Result<G8ufsInfo> {
-        match storage::mountpoint(path).await? {
-            Some(mount) => {
-                if mount.filesystem == FsType::G8UFS.as_ref() {
-                    let g8ufsinfo = mount.as_g8ufs()?;
-                    Ok(g8ufsinfo)
-                } else if mount.filesystem == FsType::Overlay.as_ref() {
-                    let overlay = mount.as_overlay()?;
-                    self.resolve(&overlay.lower_dir).await
-                } else {
-                    bail!("invalid mount fs type {}", mount.filesystem)
+    pub async fn get_volume_path<T: AsRef<str>>(&self, name: T, size: u64) -> Result<PathBuf> {
+        // no persisted volume provided, hence
+        // we need to create one, or find one that is already exists
+        match self.storage.lookup(&name) {
+            Ok(volume) => Ok(volume.path),
+            Err(_) => {
+                // Volume doesn't exist create a new one
+                if size == 0 {
+                    bail!("invalid mount option, missing disk type");
+                }
+                match self.storage.create(&name, size) {
+                    Ok(volume) => Ok(volume.path),
+                    Err(e) => {
+                        self.storage.delete(&name)?;
+                        bail!(e)
+                    }
                 }
             }
-            None => bail!("failed to get mount info"),
+        }
+    }
+
+    pub async fn resolve<T: Into<PathBuf>>(&self, path: T) -> Result<u64> {
+        let mut path = path.into();
+        loop {
+            match storage::mountpoint(&path).await? {
+                None => bail!("failed to get mount info of {}", path.display()),
+                Some(mnt) if mnt.filesystem == FsType::G8UFS.as_ref() => {
+                    return Ok(mnt.source.parse()?)
+                }
+                Some(mnt) if mnt.filesystem == FsType::Overlay.as_ref() => {
+                    if let Some(Some(p)) = mnt.option("lowerdir") {
+                        path = PathBuf::from(p)
+                    } else {
+                        bail!("invalid overlay options: {}", path.display())
+                    }
+                }
+                _ => bail!("unknown filesystem in path: {}", path.display()),
+            };
         }
     }
 }

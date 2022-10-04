@@ -6,6 +6,7 @@ use crate::bus::api::Flist;
 use crate::bus::types::storage::MountMode;
 use crate::bus::types::storage::MountOptions;
 
+use crate::bus::types::storage::WriteLayer;
 use crate::system::Executor;
 use crate::system::Syscalls;
 
@@ -58,22 +59,32 @@ where
 {
     async fn mount(&self, name: String, url: String, opts: MountOptions) -> Result<PathBuf> {
         let mountpoint = self.mount_mgr.mountpath(&name)?;
+
         if self.mount_mgr.is_mounted(&mountpoint).await {
             return Ok(mountpoint);
         }
+
         if !self.mount_mgr.valid(&mountpoint).await {
             bail!("invalid mountpoint {}", &mountpoint.display())
         }
+
         let ro_mount_path = self.mount_mgr.mount_ro(&url, opts.storage.clone()).await?;
+
         match &opts.mode {
             MountMode::ReadOnly => {
                 self.mount_mgr
                     .mount_bind(ro_mount_path, &mountpoint)
                     .await?;
             }
-            MountMode::ReadWrite(_) => {
+
+            MountMode::ReadWrite(write_layer) => {
+                let rw = match write_layer {
+                    WriteLayer::Size(size) => self.mount_mgr.get_volume_path(name, *size).await?,
+                    WriteLayer::Path(path) => PathBuf::from(&path),
+                };
+
                 self.mount_mgr
-                    .mount_overlay(name, ro_mount_path, &mountpoint, &opts)
+                    .mount_overlay(ro_mount_path, rw, &mountpoint)
                     .await?;
             }
         }
@@ -104,10 +115,8 @@ where
     // returns the hash of the given flist name
     async fn hash_of_mount(&self, name: String) -> Result<String> {
         let mountpoint = self.mount_mgr.mountpath(&name)?;
-        let info = self.mount_mgr.resolve(&mountpoint).await?;
-        let path = Path::new("/proc")
-            .join(info.pid.to_string())
-            .join("cmdline");
+        let pid = self.mount_mgr.resolve(&mountpoint).await?;
+        let path = Path::new("/proc").join(pid.to_string()).join("cmdline");
 
         let cmdline = fs::read_to_string(path).await?;
 
