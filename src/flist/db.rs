@@ -87,14 +87,6 @@ impl MetadataDbMgr {
             bail!("failed to download flist, incompatible hash")
         }
         let path = self.flist.join(&hash);
-        if let Some(parent_dir) = path.parent() {
-            fs::create_dir_all(parent_dir).await?;
-        } else {
-            bail!(
-                "can not create parent directory of {}",
-                path.display().to_string()
-            )
-        }
         fs::rename(tmp_path, &path).await?;
         Ok(path)
     }
