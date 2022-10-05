@@ -1,16 +1,19 @@
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_yaml::{self, Value};
+use std::collections::HashMap;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 pub mod signals;
 use signals::Signals;
+use std::path::Path;
 
 pub struct Client {
     socket: String,
 }
 
 const DEFAULT_SOCKET_PATH: &'static str = "/var/run/zinit.sock";
+const DEFAULT_ZINIT_PATH: &'static str = "/etc/zinit";
 
 #[derive(Deserialize)]
 struct CommandResult {
@@ -66,6 +69,26 @@ pub enum PossibleState {
 pub enum ServiceTarget {
     Up,
     Down,
+}
+
+#[derive(Deserialize)]
+pub struct InitService {
+    pub exec: String,
+    pub oneshot: bool,
+    pub test: String,
+    pub after: Vec<String>,
+    pub env: HashMap<String, String>,
+    pub log: LogType,
+}
+
+#[derive(Deserialize)]
+pub enum LogType {
+    #[serde(rename = "stdout")]
+    StdoutLogType,
+    #[serde(rename = "ring")]
+    RingLogType,
+    #[serde(rename = "none")]
+    NoneLogType,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -151,6 +174,20 @@ impl Client {
             Ok(_) => Ok(true),
             Err(err) => Err(err),
         }
+    }
+
+    pub async fn get<S: AsRef<str>>(self, service: S) -> Result<InitService> {
+        let mut file = tokio::fs::OpenOptions::new()
+            .read(true)
+            .open(Path::new(&DEFAULT_ZINIT_PATH).join(format!("{}.yaml", service.as_ref())))
+            .await?;
+
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer).await?;
+
+        let init_service: InitService = serde_yaml::from_slice(&buffer)?;
+
+        Ok(init_service)
     }
 }
 
