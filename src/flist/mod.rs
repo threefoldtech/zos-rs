@@ -99,7 +99,7 @@ where
         }
 
         fs::remove_dir_all(&mountpoint).await?;
-        self.mount_mgr.storage.delete(&name)?;
+        self.mount_mgr.storage.volume_delete(&name)?;
         self.mount_mgr.clean_unused_mounts().await
     }
 
@@ -108,7 +108,7 @@ where
         if !self.mount_mgr.is_mounted(&mountpoint).await {
             bail!("failed to update mountpoint is invalid")
         }
-        self.mount_mgr.storage.update(&name, size)?;
+        self.mount_mgr.storage.volume_update(&name, size)?;
         Ok(mountpoint)
     }
 

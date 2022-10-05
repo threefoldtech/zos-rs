@@ -21,24 +21,24 @@ pub trait VolumeAllocator {
     // more space is available in such a pool, `ErrNotEnoughSpace` is returned.
     // It is up to the caller to handle such a situation and decide if he wants
     // to try again on a different devicetype
-    fn create<S: AsRef<str>>(&self, name: S, size: Unit) -> Result<Volume>;
+    fn volume_create<S: AsRef<str>>(&self, name: S, size: Unit) -> Result<Volume>;
 
     // VolumeUpdate changes the size of an already existing volume
-    fn update<S: AsRef<str>>(&self, name: S, size: Unit) -> Result<()>;
+    fn volume_update<S: AsRef<str>>(&self, name: S, size: Unit) -> Result<()>;
 
     // ReleaseFilesystem signals that the named filesystem is no longer needed.
     // The filesystem will be unmounted and subsequently removed.
     // All data contained in the filesystem will be lost, and the
     // space which has been reserved for this filesystem will be reclaimed.
-    fn delete<S: AsRef<str>>(&self, name: S) -> Result<()>;
+    fn volume_delete<S: AsRef<str>>(&self, name: S) -> Result<()>;
     // Path return the filesystem named name
     // if no filesystem with this name exists, an error is returned
-    fn lookup<S: AsRef<str>>(&self, name: S) -> Result<Volume>;
+    fn volume_lookup<S: AsRef<str>>(&self, name: S) -> Result<Volume>;
 }
 pub struct DummyVolumeAllocator;
 
 impl VolumeAllocator for DummyVolumeAllocator {
-    fn create<S: AsRef<str>>(&self, name: S, size: Unit) -> Result<Volume> {
+    fn volume_create<S: AsRef<str>>(&self, name: S, size: Unit) -> Result<Volume> {
         return Ok(Volume {
             name: name.as_ref().to_string(),
             path: PathBuf::from("/volumes/vol1"),
@@ -46,15 +46,15 @@ impl VolumeAllocator for DummyVolumeAllocator {
         });
     }
 
-    fn update<S: AsRef<str>>(&self, _name: S, _size: Unit) -> Result<()> {
+    fn volume_update<S: AsRef<str>>(&self, _name: S, _size: Unit) -> Result<()> {
         Ok(())
     }
 
-    fn delete<S: AsRef<str>>(&self, _name: S) -> Result<()> {
+    fn volume_delete<S: AsRef<str>>(&self, _name: S) -> Result<()> {
         Ok(())
     }
 
-    fn lookup<S: AsRef<str>>(&self, name: S) -> Result<Volume> {
+    fn volume_lookup<S: AsRef<str>>(&self, name: S) -> Result<Volume> {
         return Ok(Volume {
             name: name.as_ref().to_string(),
             path: PathBuf::from("/volumes/vol1"),
