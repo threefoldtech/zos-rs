@@ -36,10 +36,13 @@ pub enum Error {
     #[error("invalid size cannot be '{size}'")]
     InvalidSize { size: Unit },
 
-    #[error("{0}")]
-    PoolError(#[from] pool::Error),
+    #[error("pool error: {0}")]
+    Pool(#[from] pool::Error),
 
-    #[error("{0}")]
+    #[error("io error: {0}")]
+    IO(#[from] std::io::Error),
+
+    #[error("unknown error: {0}")]
     Other(#[from] anyhow::Error),
 }
 
@@ -98,6 +101,8 @@ pub trait Manager {
     /// delete volume by name. If volume not found, return Ok
     async fn volume_delete<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<()>;
 
+    async fn disks(&self) -> Result<Vec<DiskInfo>>;
+
     /// look up disk by name
     async fn disk_lookup<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<DiskInfo>;
 
@@ -106,4 +111,6 @@ pub trait Manager {
         name: S,
         size: Unit,
     ) -> Result<DiskInfo>;
+
+    async fn disk_delete<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<()>;
 }
