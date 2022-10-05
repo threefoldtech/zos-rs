@@ -314,20 +314,21 @@ where
         }
         Ok(())
     }
+
     pub async fn get_volume_path<T: AsRef<str>>(&self, name: T, size: u64) -> Result<PathBuf> {
         // no persisted volume provided, hence
         // we need to create one, or find one that is already exists
-        match self.storage.lookup(&name) {
+        match self.storage.volume_lookup(&name) {
             Ok(volume) => Ok(volume.path),
             Err(_) => {
                 // Volume doesn't exist create a new one
                 if size == 0 {
                     bail!("invalid mount option, missing disk type");
                 }
-                match self.storage.create(&name, size) {
+                match self.storage.volume_create(&name, size) {
                     Ok(volume) => Ok(volume.path),
                     Err(e) => {
-                        self.storage.delete(&name)?;
+                        self.storage.volume_delete(&name)?;
                         bail!(e)
                     }
                 }
