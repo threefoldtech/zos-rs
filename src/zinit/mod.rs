@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
+use tokio::time;
 pub mod signals;
 use signals::Signals;
 use std::path::Path;
@@ -43,7 +44,7 @@ pub struct ServiceState {
     pub reason: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 pub enum PossibleState {
     // ServiceStateUnknown is return when we cannot determine the status of a service
     ServiceStateUnknown,
@@ -63,6 +64,26 @@ pub enum PossibleState {
     //due to a missing executable for example. Unlike `error` which is returned if the
     //service itself exits with an error.
     ServiceStateFailure,
+}
+
+impl ServiceState {
+    fn exited(&self) -> bool {
+        matches!(
+            self.state,
+            PossibleState::ServiceStateBlocked
+                | PossibleState::ServiceStateSuccess
+                | PossibleState::ServiceStateFailure
+                | PossibleState::ServiceStateError
+        )
+    }
+
+    // fn is(&self, state: PossibleState) -> bool {
+    //     self.state == state
+    // }
+
+    fn any(&self, states: Vec<PossibleState>) -> bool {
+        return states.contains(&self.state);
+    }
 }
 
 #[derive(Deserialize)]
@@ -98,6 +119,15 @@ pub enum Error {
     #[error("invalid command")]
     InvalidCommand,
 
+    #[error("starting service")]
+    StartingService,
+
+    #[error("service target is not up")]
+    ServiceTargetIsNotUp,
+
+    #[error("service not started in time")]
+    ServiceNotStartInTime,
+
     #[error("error from remote: {0}")]
     Remote(String),
 
@@ -118,12 +148,12 @@ impl Client {
         }
     }
 
-    async fn dial(self) -> Result<UnixStream> {
-        let stream = UnixStream::connect(self.socket).await?;
+    async fn dial(&self) -> Result<UnixStream> {
+        let stream = UnixStream::connect(self.socket.to_owned()).await?;
         Ok(stream)
     }
 
-    async fn cmd<C: AsRef<[u8]>, T: DeserializeOwned>(self, command: C) -> Result<T> {
+    async fn cmd<C: AsRef<[u8]>, T: DeserializeOwned>(&self, command: C) -> Result<T> {
         let cmd = command.as_ref();
         let mut stream = self.dial().await?;
         stream.write_all(cmd).await?;
@@ -140,8 +170,50 @@ impl Client {
         Ok(serde_yaml::from_value(res.body)?)
     }
 
-    pub async fn start<S: AsRef<str>>(self, service: S) -> Result<()> {
+    pub async fn start<S: AsRef<str>>(&self, service: S) -> Result<()> {
         self.cmd(format!("start {}", service.as_ref())).await
+    }
+
+    pub async fn start_wait<S: AsRef<str>>(
+        self,
+        timeout: time::Duration,
+        service: S,
+    ) -> Result<()> {
+        self.start(service.as_ref()).await?;
+
+        if timeout.is_zero() {
+            return Ok(());
+        }
+
+        let mut interval = time::interval(time::Duration::from_millis(1000));
+
+        time::timeout(timeout, async {
+            loop {
+                interval.tick().await;
+
+                // Now get the service status every interval
+                let s = self.status(service.as_ref()).await?;
+                // If state is running, we are done
+                if s.state.any(vec![
+                    PossibleState::ServiceStateRunning,
+                    PossibleState::ServiceStateSuccess,
+                ]) {
+                    return Ok(());
+                }
+
+                // If the target is down, this means some other service set it to down, return err.
+                if matches!(s.target, ServiceTarget::Down) {
+                    return Err(Error::ServiceTargetIsNotUp);
+                }
+
+                // If state is exited, something happened, return err.
+                if s.state.exited() {
+                    return Err(Error::StartingService);
+                }
+            }
+        })
+        .await
+        .unwrap_or(Err(Error::ServiceNotStartInTime))
     }
 
     pub async fn stop<S: AsRef<str>>(self, service: S) -> Result<()> {
@@ -161,7 +233,7 @@ impl Client {
         self.cmd(format!("reboot {}", service.as_ref())).await
     }
 
-    pub async fn status<S: AsRef<str>>(self, service: S) -> Result<ServiceStatus> {
+    pub async fn status<S: AsRef<str>>(&self, service: S) -> Result<ServiceStatus> {
         self.cmd(format!("status {}", service.as_ref())).await
     }
 
