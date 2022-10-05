@@ -108,7 +108,7 @@ where
 
     // Checks if the given path is mountpoint or not
     pub async fn is_mounted<P: AsRef<Path>>(&self, path: P) -> bool {
-        storage::mountpoint(path.as_ref()).await.is_ok()
+        matches!(storage::mountpoint(path.as_ref()).await, Ok(Some(_)))
     }
 
     // Checks is the given path is a valid mountpoint means:
@@ -405,7 +405,7 @@ mod test {
             .arg("--meta")
             .arg(flist_path)
             .arg("--storage-url")
-            .arg("test")
+            .arg(storage_url)
             .arg("--daemon")
             .arg("--log")
             .arg(log_path.as_os_str())
@@ -414,6 +414,7 @@ mod test {
         mount_mgr
             .executor
             .expect_run()
+            .times(1)
             .withf(move |arg: &Command| arg == &cmd)
             .returning(|_| Ok(Vec::default()));
 
