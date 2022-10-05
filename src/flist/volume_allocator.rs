@@ -35,9 +35,9 @@ pub trait VolumeAllocator {
     // if no filesystem with this name exists, an error is returned
     fn volume_lookup<S: AsRef<str>>(&self, name: S) -> Result<Volume>;
 }
-pub struct DummyVolumeAllocator;
+pub struct MockVolumeAllocator;
 
-impl VolumeAllocator for DummyVolumeAllocator {
+impl VolumeAllocator for MockVolumeAllocator {
     fn volume_create<S: AsRef<str>>(&self, name: S, size: Unit) -> Result<Volume> {
         return Ok(Volume {
             name: name.as_ref().to_string(),
