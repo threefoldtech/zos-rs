@@ -125,8 +125,14 @@ pub enum Error {
     #[error("service target is not up")]
     ServiceTargetIsNotUp,
 
+    #[error("service target is not down")]
+    ServiceTargetIsNotDown,
+
     #[error("service not started in time")]
-    ServiceNotStartInTime,
+    ServiceNotStartedInTime,
+
+    #[error("service not stopped in time")]
+    ServiceNotStoppedInTime,
 
     #[error("error from remote: {0}")]
     Remote(String),
@@ -185,7 +191,7 @@ impl Client {
             return Ok(());
         }
 
-        let mut interval = time::interval(time::Duration::from_millis(1000));
+        let mut interval = time::interval(time::Duration::from_secs(1));
 
         time::timeout(timeout, async {
             loop {
@@ -213,11 +219,44 @@ impl Client {
             }
         })
         .await
-        .unwrap_or(Err(Error::ServiceNotStartInTime))
+        .unwrap_or(Err(Error::ServiceNotStartedInTime))
     }
 
     pub async fn stop<S: AsRef<str>>(&self, service: S) -> Result<()> {
         self.cmd(format!("stop {}", service.as_ref())).await
+    }
+
+    pub async fn stop_wait<S: AsRef<str>>(
+        &self,
+        timeout: time::Duration,
+        service: S,
+    ) -> Result<()> {
+        self.stop(service.as_ref()).await?;
+
+        if timeout.is_zero() {
+            return Ok(());
+        }
+
+        let mut interval = time::interval(time::Duration::from_secs(1));
+        time::timeout(timeout, async {
+            loop {
+                interval.tick().await;
+
+                // Now get the service status every interval
+                let s = self.status(service.as_ref()).await?;
+                // If state is exited, we are done.
+                if s.state.exited() {
+                    return Err(Error::StartingService);
+                }
+
+                // If the target is up, this means some other service set it to up, return err.
+                if matches!(s.target, ServiceTarget::Up) {
+                    return Err(Error::ServiceTargetIsNotDown);
+                }
+            }
+        })
+        .await
+        .unwrap_or(Err(Error::ServiceNotStoppedInTime))
     }
 
     pub async fn forget<S: AsRef<str>>(&self, service: S) -> Result<()> {
