@@ -175,7 +175,7 @@ impl Client {
     }
 
     pub async fn start_wait<S: AsRef<str>>(
-        self,
+        &self,
         timeout: time::Duration,
         service: S,
     ) -> Result<()> {
@@ -216,20 +216,20 @@ impl Client {
         .unwrap_or(Err(Error::ServiceNotStartInTime))
     }
 
-    pub async fn stop<S: AsRef<str>>(self, service: S) -> Result<()> {
+    pub async fn stop<S: AsRef<str>>(&self, service: S) -> Result<()> {
         self.cmd(format!("stop {}", service.as_ref())).await
     }
 
-    pub async fn forget<S: AsRef<str>>(self, service: S) -> Result<()> {
+    pub async fn forget<S: AsRef<str>>(&self, service: S) -> Result<()> {
         self.cmd(format!("forget {}", service.as_ref())).await
     }
 
-    pub async fn kill<S: AsRef<str>>(self, service: S, signal: Signals) -> Result<()> {
+    pub async fn kill<S: AsRef<str>>(&self, service: S, signal: Signals) -> Result<()> {
         self.cmd(format!("kill {} {}", service.as_ref(), signal))
             .await
     }
 
-    pub async fn reboot<S: AsRef<str>>(self, service: S) -> Result<()> {
+    pub async fn reboot<S: AsRef<str>>(&self, service: S) -> Result<()> {
         self.cmd(format!("reboot {}", service.as_ref())).await
     }
 
@@ -237,18 +237,18 @@ impl Client {
         self.cmd(format!("status {}", service.as_ref())).await
     }
 
-    pub async fn list<S: AsRef<str>>(self, service: S) -> Result<Vec<ServiceState>> {
+    pub async fn list<S: AsRef<str>>(&self, service: S) -> Result<Vec<ServiceState>> {
         self.cmd(format!("list {}", service.as_ref())).await
     }
 
-    pub async fn exists<S: AsRef<str>>(self, service: S) -> Result<bool> {
+    pub async fn exists<S: AsRef<str>>(&self, service: S) -> Result<bool> {
         match self.status(service.as_ref()).await {
             Ok(_) => Ok(true),
             Err(err) => Err(err),
         }
     }
 
-    pub async fn get<S: AsRef<str>>(self, service: S) -> Result<InitService> {
+    pub async fn get<S: AsRef<str>>(&self, service: S) -> Result<InitService> {
         let mut file = tokio::fs::OpenOptions::new()
             .read(true)
             .open(Path::new(&DEFAULT_ZINIT_PATH).join(format!("{}.yaml", service.as_ref())))
