@@ -138,3 +138,73 @@ where
         Ok(self.mount_mgr.is_mounted(&mountpoint).await)
     }
 }
+
+#[cfg(test)]
+mod test {
+
+    use super::{FListDaemon, MountManager};
+    use crate::bus::api::Flist;
+    use crate::bus::types::storage::{MountMode, MountOptions};
+    use crate::{
+        flist::volume_allocator::MockVolumeAllocator,
+        system::{Command, Mockyscalls},
+    };
+    #[tokio::test]
+    async fn test_mount_with_mount_bind() {
+        let executor = crate::system::MockExecutor::default();
+
+        let mut flist = FListDaemon::new("/tmp/flist", Mockyscalls, MockVolumeAllocator, executor)
+            .await
+            .unwrap();
+        let flist_path = flist
+            .mount_mgr
+            .flist
+            .join("efc9269253cb7210d6eded4aa53b7dfc");
+        let ro_mountpoint = flist.mount_mgr.ro.join("efc9269253cb7210d6eded4aa53b7dfc");
+        let log_path = flist
+            .mount_mgr
+            .log
+            .join("efc9269253cb7210d6eded4aa53b7dfc.log");
+        let storage_url = "http://storage-url.com";
+        let cmd = Command::new("g8ufs")
+            .arg("--cache")
+            .arg(flist.mount_mgr.cache.as_os_str())
+            .arg("--meta")
+            .arg(flist_path)
+            .arg("--storage-url")
+            .arg(storage_url)
+            .arg("--daemon")
+            .arg("--log")
+            .arg(log_path.as_os_str())
+            .arg("--ro")
+            .arg(&ro_mountpoint.as_os_str());
+        flist
+            .mount_mgr
+            .executor
+            .expect_run()
+            .times(1)
+            .withf(move |arg: &Command| arg == &cmd)
+            .returning(|_| Ok(Vec::default()));
+        let opts = MountOptions {
+            mode: MountMode::ReadOnly,
+            storage: Some(storage_url.to_string()),
+        };
+        match flist
+            .mount(
+                "test_flist".into(),
+                "https://hub.grid.tf/ashraf.3bot/ashraffouda-mattermost-latest.flist".into(),
+                opts,
+            )
+            .await
+        {
+            // /tmp/flist/mountpoint/test_flist, was not mounted in time
+            Ok(_) => {}
+            Err(error) => {
+                assert_eq!(
+                    error.to_string(),
+                    "/tmp/flist/mountpoint/test_flist, was not mounted in time"
+                )
+            }
+        }
+    }
+}
