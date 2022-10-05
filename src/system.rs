@@ -170,8 +170,8 @@ impl Syscalls for System {
     }
 }
 
-pub struct DummySyscalls;
-impl Syscalls for DummySyscalls {
+pub struct Mockyscalls;
+impl Syscalls for Mockyscalls {
     fn mount<S: AsRef<Path>, T: AsRef<Path>, F: AsRef<str>, D: AsRef<str>>(
         &self,
         _source: Option<S>,

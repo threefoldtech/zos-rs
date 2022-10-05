@@ -135,7 +135,7 @@ where
             duration -= 1;
         }
 
-        bail!("was not mounted in time")
+        bail!("{}, was not mounted in time", path.as_ref().display())
     }
 
     // MountRO mounts an flist in read-only mode. This mount then can be shared between multiple rw mounts
@@ -359,31 +359,54 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::path::Path;
+
+    use std::path::{Path, PathBuf};
+
+    use anyhow::bail;
+    use nix::mount::{MntFlags, MsFlags};
 
     use super::MountManager;
     use crate::{
         flist::volume_allocator::MockVolumeAllocator,
-        system::{Command, Syscalls},
+        system::{Command, Error, Syscalls},
     };
-    struct MockSyscalls;
-    impl Syscalls for MockSyscalls {
+    pub struct Mockyscalls;
+    impl Syscalls for Mockyscalls {
         fn mount<S: AsRef<Path>, T: AsRef<Path>, F: AsRef<str>, D: AsRef<str>>(
             &self,
-            _source: Option<S>,
-            _target: T,
-            _fstype: Option<F>,
-            _flags: nix::mount::MsFlags,
+            source: Option<S>,
+            target: T,
+            fstype: Option<F>,
+            flags: MsFlags,
             _data: Option<D>,
-        ) -> Result<(), crate::system::Error> {
-            Ok(())
+        ) -> Result<(), Error> {
+            match fstype {
+                Some(fstype) if fstype.as_ref() == "overlay" => {
+                    let _expected_target = PathBuf::from("/tmp/flist/mountpoint/test_mount");
+                    let _expected_source = PathBuf::from("overlay");
+                    assert!(matches!(source.as_ref(), Some(_expected_source)));
+                    assert!(matches!(target.as_ref(), _expected_traget));
+                    assert!(matches!(flags, nix::mount::MsFlags::MS_NOATIME));
+                    Ok(())
+                }
+                Some(fstype) if fstype.as_ref() == "bind" => {
+                    let _expected_source =
+                        PathBuf::from("/tmp/flist/ro/efc9269253cb7210d6eded4aa53b7dfc");
+                    let _expected_target = PathBuf::from("/tmp/flist/mountpoint/test_mount");
+                    assert!(matches!(source, Some(_expected_source)));
+                    assert!(matches!(target, _expected_target));
+                    assert!(matches!(flags, nix::mount::MsFlags::MS_BIND));
+                    Ok(())
+                }
+                _ => Err(Error::new(1, Some("Bad fstype"))),
+            }
         }
 
         fn umount<T: AsRef<Path>>(
             &self,
             _target: T,
-            _flags: Option<nix::mount::MntFlags>,
-        ) -> Result<(), crate::system::Error> {
+            _flags: Option<MntFlags>,
+        ) -> Result<(), Error> {
             Ok(())
         }
     }
@@ -392,7 +415,7 @@ mod test {
         let executor = crate::system::MockExecutor::default();
 
         let mut mount_mgr =
-            MountManager::new("/tmp/flist", MockSyscalls, MockVolumeAllocator, executor)
+            MountManager::new("/tmp/flist", Mockyscalls, MockVolumeAllocator, executor)
                 .await
                 .unwrap();
         let flist_path = mount_mgr.flist.join("efc9269253cb7210d6eded4aa53b7dfc");
@@ -423,6 +446,41 @@ mod test {
                 "https://hub.grid.tf/ashraf.3bot/ashraffouda-mattermost-latest.flist",
                 Some(storage_url),
             )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mount_bind() {
+        let executor = crate::system::MockExecutor::default();
+
+        let mount_mgr = MountManager::new("/tmp/flist", Mockyscalls, MockVolumeAllocator, executor)
+            .await
+            .unwrap();
+        let ro_mountpoint = mount_mgr.ro.join("efc9269253cb7210d6eded4aa53b7dfc");
+        let mountpoint = mount_mgr.mountpoint.join("test_mount");
+        match mount_mgr.mount_bind(&ro_mountpoint, &mountpoint).await {
+            // /tmp/flist/mountpoint/test_flist, was not mounted in time
+            Ok(_) => {}
+            Err(error) => {
+                assert_eq!(
+                    error.to_string(),
+                    "/tmp/flist/mountpoint/test_mount, was not mounted in time"
+                )
+            }
+        };
+    }
+    #[tokio::test]
+    async fn test_mount_overlay() {
+        let executor = crate::system::MockExecutor::default();
+
+        let mount_mgr = MountManager::new("/tmp/flist", Mockyscalls, MockVolumeAllocator, executor)
+            .await
+            .unwrap();
+        let ro_mountpoint = mount_mgr.ro.join("efc9269253cb7210d6eded4aa53b7dfc");
+        let mountpoint = mount_mgr.mountpoint.join("test_mount");
+        mount_mgr
+            .mount_overlay(&ro_mountpoint, "vol_path", &mountpoint)
             .await
             .unwrap();
     }
