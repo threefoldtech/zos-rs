@@ -176,7 +176,7 @@ where
         };
 
         let log_name = format!("{}.log", hash);
-        let log_path = Path::new(&self.log).join(&log_name);
+        let log_path = self.log.join(&log_name);
 
         let cmd = Command::new("g8ufs")
             .arg("--cache")
@@ -261,7 +261,7 @@ where
         // Get all flists managed by flist Daemon
         let ros = all
             .iter()
-            .filter(|mnt_info| Path::new(&mnt_info.target).starts_with(&self.root))
+            .filter(|mnt_info| mnt_info.target.starts_with(&self.root))
             .filter(|mnt_info| {
                 mnt_info.target.parent() == Some(&self.ro)
                     && mnt_info.filesystem == FsType::G8UFS.as_ref()
@@ -354,5 +354,75 @@ where
                 _ => bail!("unknown filesystem in path: {}", path.display()),
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::path::Path;
+
+    use super::MountManager;
+    use crate::{
+        flist::volume_allocator::MockVolumeAllocator,
+        system::{Command, Syscalls},
+    };
+    struct MockSyscalls;
+    impl Syscalls for MockSyscalls {
+        fn mount<S: AsRef<Path>, T: AsRef<Path>, F: AsRef<str>, D: AsRef<str>>(
+            &self,
+            _source: Option<S>,
+            _target: T,
+            _fstype: Option<F>,
+            _flags: nix::mount::MsFlags,
+            _data: Option<D>,
+        ) -> Result<(), crate::system::Error> {
+            Ok(())
+        }
+
+        fn umount<T: AsRef<Path>>(
+            &self,
+            _target: T,
+            _flags: Option<nix::mount::MntFlags>,
+        ) -> Result<(), crate::system::Error> {
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn test_mount_ro() {
+        let executor = crate::system::MockExecutor::default();
+
+        let mut mount_mgr =
+            MountManager::new("/tmp/flist", MockSyscalls, MockVolumeAllocator, executor)
+                .await
+                .unwrap();
+        let flist_path = mount_mgr.flist.join("efc9269253cb7210d6eded4aa53b7dfc");
+        let ro_mountpoint = mount_mgr.ro.join("efc9269253cb7210d6eded4aa53b7dfc");
+        let log_path = mount_mgr.log.join("efc9269253cb7210d6eded4aa53b7dfc.log");
+        let storage_url = "http://storage-url.com";
+        let cmd = Command::new("g8ufs")
+            .arg("--cache")
+            .arg(mount_mgr.cache.as_os_str())
+            .arg("--meta")
+            .arg(flist_path)
+            .arg("--storage-url")
+            .arg("test")
+            .arg("--daemon")
+            .arg("--log")
+            .arg(log_path.as_os_str())
+            .arg("--ro")
+            .arg(&ro_mountpoint.as_os_str());
+        mount_mgr
+            .executor
+            .expect_run()
+            .withf(move |arg: &Command| arg == &cmd)
+            .returning(|_| Ok(Vec::default()));
+
+        mount_mgr
+            .mount_ro(
+                "https://hub.grid.tf/ashraf.3bot/ashraffouda-mattermost-latest.flist",
+                Some(storage_url),
+            )
+            .await
+            .unwrap();
     }
 }

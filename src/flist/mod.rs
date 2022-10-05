@@ -116,13 +116,13 @@ where
     async fn hash_of_mount(&self, name: String) -> Result<String> {
         let mountpoint = self.mount_mgr.mountpath(&name)?;
         let pid = self.mount_mgr.resolve(&mountpoint).await?;
-        let path = Path::new("/proc").join(pid.to_string()).join("cmdline");
+        let path = PathBuf::from("/proc").join(pid.to_string()).join("cmdline");
 
         let cmdline = fs::read_to_string(path).await?;
 
         let parts = cmdline.split('\0');
         for part in parts {
-            let path = Path::new(&part);
+            let path = PathBuf::from(&part);
             if path.starts_with(&self.mount_mgr.flist) {
                 match path.file_name() {
                     Some(filename) => return Ok(filename.to_string_lossy().to_string()),

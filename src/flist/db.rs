@@ -71,7 +71,7 @@ impl MetadataDbMgr {
         // );
         let mut hasher = Md5::new();
         let fname = Uuid::new_v4().simple();
-        let tmp_path = Path::new(&self.flist).join(&fname.to_string());
+        let tmp_path = self.flist.join(&fname.to_string());
         let mut tmp_file = fs::OpenOptions::new()
             .write(true)
             .create(true)
