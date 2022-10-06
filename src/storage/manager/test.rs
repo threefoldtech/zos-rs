@@ -145,8 +145,7 @@ impl UpPool for TestUpPool {
             .volumes()
             .await?
             .into_iter()
-            .filter(|v| v.name() == name.as_ref())
-            .next()
+            .find(|v| v.name() == name.as_ref())
         {
             Some(vol) => Ok(vol),
             None => Err(Error::VolumeNotFound {
@@ -284,20 +283,10 @@ async fn manager_initialize_basic() {
     assert_eq!(mgr.ssd_size, 2 * crate::TERABYTE);
     assert_eq!(mgr.hdd_size, 4 * crate::TERABYTE);
 
-    let pool_1 = &mgr
-        .ssds
-        .iter()
-        .filter(|p| p.name() == "pool-1")
-        .next()
-        .unwrap();
+    let pool_1 = &mgr.ssds.iter().find(|p| p.name() == "pool-1").unwrap();
     assert_eq!(pool_1.state(), State::Down);
 
-    let pool_2 = &mgr
-        .ssds
-        .iter()
-        .filter(|p| p.name() == "pool-2")
-        .next()
-        .unwrap();
+    let pool_2 = &mgr.ssds.iter().find(|p| p.name() == "pool-2").unwrap();
     assert_eq!(pool_2.state(), State::Up);
 
     let volumes = mgr.volumes().await.unwrap();
@@ -475,8 +464,7 @@ async fn manager_vol_create_space_unavailable() {
     assert_eq!(
         mgr.ssds
             .iter()
-            .filter(|p| p.name() == &p1_label)
-            .next()
+            .find(|p| p.name() == &p1_label)
             .unwrap()
             .state(),
         State::Down
@@ -485,8 +473,7 @@ async fn manager_vol_create_space_unavailable() {
     assert_eq!(
         mgr.ssds
             .iter()
-            .filter(|p| p.name() == &p2_label)
-            .next()
+            .find(|p| p.name() == &p2_label)
             .unwrap()
             .state(),
         State::Up
@@ -508,8 +495,7 @@ async fn manager_vol_create_space_unavailable() {
     assert_eq!(
         mgr.ssds
             .iter()
-            .filter(|p| p.name() == &p1_label)
-            .next()
+            .find(|p| p.name() == &p1_label)
             .unwrap()
             .state(),
         State::Up
@@ -518,8 +504,7 @@ async fn manager_vol_create_space_unavailable() {
     assert_eq!(
         mgr.ssds
             .iter()
-            .filter(|p| p.name() == &p2_label)
-            .next()
+            .find(|p| p.name() == &p2_label)
             .unwrap()
             .state(),
         State::Up
@@ -572,12 +557,7 @@ async fn manager_vol_delete() {
     assert_eq!(mgr.ssds.len(), 1);
     assert_eq!(mgr.ssd_size, 1 * crate::TERABYTE);
 
-    let pool_1 = &mgr
-        .ssds
-        .iter()
-        .filter(|p| p.name() == "pool-1")
-        .next()
-        .unwrap();
+    let pool_1 = &mgr.ssds.iter().find(|p| p.name() == "pool-1").unwrap();
     assert_eq!(pool_1.state(), State::Up);
 
     // find volume by name.
@@ -675,8 +655,7 @@ async fn manager_disk() {
 
     let disk = disks
         .iter()
-        .filter(|d| d.path.file_name().unwrap() == "test.25")
-        .next()
+        .find(|d| d.path.file_name().unwrap() == "test.25")
         .unwrap();
 
     assert_eq!(disk.size, 25 * crate::MEGABYTE);
@@ -694,4 +673,119 @@ async fn manager_disk() {
 
     let disk = mgr.disk_lookup("test.50").await;
     assert!(matches!(disk, Err(crate::storage::Error::NotFound { .. })));
+
+    mgr.disk_expand("test.25", 50 * crate::MEGABYTE)
+        .await
+        .unwrap();
+
+    let disk = mgr.disk_lookup("test.25").await.unwrap();
+    assert_eq!(disk.size, 50 * crate::MEGABYTE);
+}
+
+#[tokio::test]
+async fn manager_device_allocate() {
+    use crate::storage::device::test::*;
+    use crate::storage::device::DeviceType;
+
+    let p1_dev: PathBuf = "/dev/test1".into();
+    let p1_label: String = "pool-1".into();
+
+    let p2_dev: PathBuf = "/dev/test2".into();
+    let p2_label: String = "pool-2".into();
+
+    let blk = TestManager {
+        devices: vec![
+            TestDevice {
+                path: p1_dev.clone(),
+                device_type: DeviceType::HDD,
+                filesystem: Some("test".into()),
+                label: Some(p1_label.clone()),
+                size: 1 * crate::TERABYTE,
+            },
+            TestDevice {
+                path: p2_dev.clone(),
+                device_type: DeviceType::HDD,
+                filesystem: Some("test".into()),
+                label: Some(p2_label.clone()),
+                size: 1 * crate::TERABYTE,
+            },
+        ],
+    };
+
+    // map devices to pools
+    let mut pool_manager = TestPoolManager::default();
+    let pool1_path = Path::new("/tmp").join(&p1_label);
+    let pool2_path = Path::new("/tmp").join(&p2_label);
+
+    pool_manager.map.insert(
+        p1_dev.clone(),
+        Pool::Down(TestDownPool {
+            name: p1_label.clone(),
+            size: 100 * crate::MEGABYTE,
+            up: TestUpPool {
+                name: p1_label.clone(),
+                path: pool1_path.clone(),
+                size: 1 * crate::TERABYTE,
+                volumes: Arc::new(Mutex::new(vec![TestVolume {
+                    id: 0,
+                    name: "zdb".into(),
+                    path: pool1_path.join("zdb"),
+                    usage: 100 * crate::MEGABYTE,
+                }])),
+            },
+        }),
+    );
+
+    pool_manager.map.insert(
+        p2_dev.clone(),
+        Pool::Down(TestDownPool {
+            name: p2_label.clone(),
+            size: 100 * crate::MEGABYTE,
+            up: TestUpPool {
+                name: p2_label.clone(),
+                path: pool2_path.clone(),
+                size: 1 * crate::TERABYTE,
+                volumes: Arc::new(Mutex::new(Vec::default())),
+            },
+        }),
+    );
+
+    let mut mgr = StorageManager::new(blk, pool_manager)
+        .await
+        .expect("manager failed to create");
+
+    assert_eq!(mgr.hdds.len(), 2);
+    assert_eq!(
+        mgr.hdds
+            .iter()
+            .find(|p| p.name() == p1_label)
+            .unwrap()
+            .state(),
+        State::Up
+    );
+
+    assert_eq!(
+        mgr.hdds
+            .iter()
+            .find(|p| p.name() == p2_label)
+            .unwrap()
+            .state(),
+        State::Down
+    );
+
+    let device = mgr.device_allocate(100 * crate::GIGABYTE).await.unwrap();
+    assert_eq!(device.id, p2_label);
+    assert_eq!(device.path, Path::new("/tmp/pool-2/zdb"));
+
+    let devices = mgr.devices().await.unwrap();
+    assert_eq!(devices.len(), 2);
+
+    let device = mgr.device_lookup(&p2_label).await.unwrap();
+    assert_eq!(device.id, p2_label);
+    assert_eq!(device.path, pool2_path.join("zdb"));
+
+    let device = mgr.device_lookup("does-not-exist").await;
+    assert!(
+        matches!(device, Err(crate::storage::Error::NotFound{kind, ..}) if kind == Kind::Device )
+    )
 }

@@ -43,6 +43,7 @@ pub struct Store<T> {
 
 impl<T> Store<T> {
     #[cfg(not(test))]
+    /// create a new instance of cache
     pub async fn new<S: AsRef<str>>(name: S, size: Unit) -> Result<Self> {
         let path = volatile(name, size).await?;
 
@@ -53,8 +54,11 @@ impl<T> Store<T> {
     }
 
     #[cfg(test)]
+    /// this version of the cache doesn't use mount and also automatically purge the cache each time
+    /// it's created
     pub async fn new<S: AsRef<str>>(name: S, _size: Unit) -> Result<Self> {
         let path = std::env::temp_dir().join(name.as_ref());
+        let _ = tokio::fs::remove_dir_all(&path).await;
         tokio::fs::create_dir_all(&path).await?;
         Ok(Store {
             path,
@@ -92,3 +96,5 @@ impl<T: FromStr> Store<T> {
         Ok(Some(t))
     }
 }
+
+// todo! add tests for cache

@@ -8,12 +8,14 @@ pub mod manager;
 pub mod mount;
 pub mod pool;
 
+pub use manager::StorageManager;
 pub use mount::{mountinfo, mountpoint, mounts, Mount};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Kind {
     Volume,
     Disk,
+    Device,
 }
 
 impl Display for Kind {
@@ -21,6 +23,7 @@ impl Display for Kind {
         match self {
             Self::Volume => write!(f, "volume"),
             Self::Disk => write!(f, "disk"),
+            Self::Device => write!(f, "device"),
         }
     }
 }
@@ -32,6 +35,9 @@ pub enum Error {
 
     #[error("no enough space left on devices")]
     NoEnoughSpaceLeft,
+
+    #[error("no device left to support required size")]
+    NoDeviceLeft,
 
     #[error("invalid size cannot be '{size}'")]
     InvalidSize { size: Unit },
@@ -86,6 +92,13 @@ pub struct DiskInfo {
     pub size: Unit,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    pub id: String,
+    pub path: PathBuf,
+    pub size: Unit,
+}
+
 #[async_trait::async_trait]
 pub trait Manager {
     /// list all available volumes information
@@ -101,16 +114,31 @@ pub trait Manager {
     /// delete volume by name. If volume not found, return Ok
     async fn volume_delete<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<()>;
 
+    /// list all available disks
     async fn disks(&self) -> Result<Vec<DiskInfo>>;
 
     /// look up disk by name
     async fn disk_lookup<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<DiskInfo>;
 
+    /// create a disk with given name and size
     async fn disk_create<S: AsRef<str> + Send + Sync>(
         &mut self,
         name: S,
         size: Unit,
     ) -> Result<DiskInfo>;
 
+    /// delete disk with name
     async fn disk_delete<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<()>;
+
+    /// expand disk to given size which must be bigger than previous size
+    async fn disk_expand<S: AsRef<str> + Send + Sync>(&self, name: S, size: Unit) -> Result<()>;
+
+    /// list all allocated devices
+    async fn devices(&self) -> Result<Vec<DeviceInfo>>;
+
+    /// look up device by name
+    async fn device_lookup<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<DeviceInfo>;
+
+    /// device allocate takes the first free HDD that can fullfil the given min size
+    async fn device_allocate(&mut self, min: Unit) -> Result<DeviceInfo>;
 }

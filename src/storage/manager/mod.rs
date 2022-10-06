@@ -3,7 +3,7 @@ use super::pool;
 use super::pool::State;
 use super::pool::{Pool, PoolManager};
 use super::Result;
-use super::{DiskInfo, VolumeInfo};
+use super::{DeviceInfo, DiskInfo, VolumeInfo};
 use crate::cache::Store;
 use crate::storage::device::{DeviceManager, DeviceType};
 use crate::storage::pool::{DownPool, UpPool, Volume};
@@ -14,6 +14,7 @@ use std::path::Path;
 use tokio::fs::OpenOptions;
 
 const VDISKS_VOLUME: &str = "vdisks";
+const ZDB_VOLUME: &str = "zdb";
 
 pub struct StorageManager<M, P, U, D>
 where
@@ -394,12 +395,116 @@ where
             .await
             .map_err(|err| err.into())
     }
+
+    async fn disk_expand<S: AsRef<str> + Send + Sync>(&self, name: S, size: Unit) -> Result<()> {
+        // expand disk size
+        let disk = self.disk_lookup(name).await?;
+        if size < disk.size {
+            return Err(super::Error::InvalidSize { size });
+        } else if disk.size == size {
+            return Ok(());
+        }
+
+        mkdisk(disk.path, size).await
+    }
+
+    // devices
+    async fn device_allocate(&mut self, min: Unit) -> Result<DeviceInfo> {
+        for pool in self.hdds.iter_mut() {
+            if pool.state() == State::Up || pool.size() < min {
+                continue;
+            }
+
+            let up: &U = pool.into_up().await?;
+            // if volume exist with the same name this definitely
+            // then be already up. we avoid allocating it anyway
+            match up.volume(ZDB_VOLUME).await {
+                Ok(_) => continue,
+                Err(pool::Error::VolumeNotFound { .. }) => (),
+                Err(err) => return Err(err.into()),
+            };
+
+            let volume = up.volume_create(ZDB_VOLUME).await?;
+            return Ok(DeviceInfo {
+                id: up.name().into(),
+                path: volume.path().into(),
+                size: up.size(),
+            });
+        }
+
+        Err(super::Error::NoDeviceLeft)
+    }
+
+    async fn devices(&self) -> Result<Vec<DeviceInfo>> {
+        let mut devices = vec![];
+        for pool in self.hdds.iter() {
+            let up = match pool {
+                Pool::Up(up) => up,
+                _ => continue,
+            };
+
+            // if volume exist with the same name this definitely
+            // then be already up. we avoid allocating it anyway
+            let vol = match up.volume(ZDB_VOLUME).await {
+                Ok(vol) => vol,
+                Err(pool::Error::VolumeNotFound { .. }) => continue,
+                Err(err) => {
+                    log::error!("failed to get volume: {}", err);
+                    continue;
+                }
+            };
+
+            devices.push(DeviceInfo {
+                id: up.name().into(),
+                path: vol.path().into(),
+                size: pool.size(),
+            })
+        }
+
+        Ok(devices)
+    }
+
+    async fn device_lookup<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<DeviceInfo> {
+        for pool in self.hdds.iter() {
+            let up = match pool {
+                Pool::Up(up) => up,
+                _ => continue,
+            };
+
+            if up.name() != name.as_ref() {
+                continue;
+            }
+
+            // if volume exist with the same name this definitely
+            // then be already up. we avoid allocating it anyway
+            let vol = match up.volume(ZDB_VOLUME).await {
+                Ok(vol) => vol,
+                Err(pool::Error::VolumeNotFound { .. }) => continue,
+                Err(err) => {
+                    log::error!("failed to get volume: {}", err);
+                    continue;
+                }
+            };
+
+            return Ok(DeviceInfo {
+                id: up.name().into(),
+                path: vol.path().into(),
+                size: pool.size(),
+            });
+        }
+
+        Err(super::Error::NotFound {
+            id: name.as_ref().into(),
+            kind: super::Kind::Device,
+        })
+    }
 }
 
 async fn mkdisk<T: AsRef<Path>>(path: T, size: Unit) -> Result<()> {
     let file = OpenOptions::new()
         .create(true)
         .write(true)
+        .read(true)
         .open(&path)
         .await
         .context("failed to create disk file")?;
