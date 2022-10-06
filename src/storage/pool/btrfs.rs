@@ -80,8 +80,7 @@ where
             .qgroup_list(&self.path)
             .await?
             .into_iter()
-            .filter(|g| g.id == format!("0/{}", self.id))
-            .next();
+            .find(|g| g.id == format!("0/{}", self.id));
 
         let qgroup = qgroup.ok_or_else(|| Error::QGroupNotFound {
             volume: self.path.clone(),
@@ -151,7 +150,7 @@ where
 
     fn name(&self) -> &str {
         // if we are at this state so device MUST have a label so it's safe to do this
-        &self.device.label().unwrap()
+        self.device.label().unwrap()
     }
 
     fn size(&self) -> Unit {
@@ -214,7 +213,7 @@ where
 
     fn name(&self) -> &str {
         // if we are at this state so device MUST have a label so it's safe to do this
-        &self.device.label().unwrap()
+        self.device.label().unwrap()
     }
 
     fn size(&self) -> Unit {
@@ -235,7 +234,7 @@ where
 
         Ok(Usage {
             size: self.device.size(),
-            used: used,
+            used,
         })
     }
 
@@ -316,8 +315,7 @@ where
         let mnt = crate::storage::mountinfo(path)
             .await?
             .into_iter()
-            .filter(|m| matches!(m.option("subvol"), Some(Some(v)) if v == "/"))
-            .next();
+            .find(|m| matches!(m.option("subvol"), Some(Some(v)) if v == "/"));
 
         let utils = Arc::new(BtrfsUtils::new(exec));
         match mnt {
@@ -532,10 +530,10 @@ impl<E: Executor + 'static> BtrfsUtils<E> {
         //the string until the id is found than allocating strings
         use std::io::{BufRead, BufReader};
         let reader = BufReader::new(data);
-        let mut lines = reader.lines();
-        while let Some(line) = lines.next() {
+        let lines = reader.lines();
+        for line in lines {
             let line = line?;
-            let parts: Vec<&str> = line.splitn(2, ":").collect();
+            let parts: Vec<&str> = line.splitn(2, ':').collect();
             if parts.len() != 2 {
                 continue;
             }
@@ -550,9 +548,9 @@ impl<E: Executor + 'static> BtrfsUtils<E> {
     fn parse_qgroup(&self, data: &[u8]) -> anyhow::Result<Vec<QGroupInfo>> {
         use std::io::{BufRead, BufReader};
         let reader = BufReader::new(data);
-        let mut lines = reader.lines().skip(2);
+        let lines = reader.lines().skip(2);
         let mut groups = vec![];
-        while let Some(line) = lines.next() {
+        for line in lines {
             let line = line?;
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() != 5 {
@@ -582,9 +580,9 @@ impl<E: Executor + 'static> BtrfsUtils<E> {
     fn parse_volumes(&self, data: &[u8]) -> anyhow::Result<Vec<VolumeInfo>> {
         use std::io::{BufRead, BufReader};
         let reader = BufReader::new(data);
-        let mut lines = reader.lines();
+        let lines = reader.lines();
         let mut volumes = vec![];
-        while let Some(line) = lines.next() {
+        for line in lines {
             let line = line?;
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() != 9 {

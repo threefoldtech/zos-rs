@@ -26,8 +26,8 @@ impl Mount {
     pub fn option<K: AsRef<str>>(&self, key: K) -> Option<Option<&str>> {
         let key = key.as_ref();
         self.options
-            .split(",")
-            .map(|p| p.splitn(2, "=").collect::<Vec<&str>>())
+            .split(',')
+            .map(|p| p.splitn(2, '=').collect::<Vec<&str>>())
             .filter(|i| i[0] == key)
             .map(|i| if i.len() == 2 { Some(i[1]) } else { None })
             .next()
@@ -38,7 +38,7 @@ impl Mount {
 pub async fn mountpoint<P: AsRef<Path>>(target: P) -> Result<Option<Mount>> {
     let mounts = mounts().await?;
     let target = target.as_ref();
-    Ok(mounts.into_iter().filter(|m| m.target == target).next())
+    Ok(mounts.into_iter().find(|m| m.target == target))
 }
 
 /// mount info returns mount information of source mount. if source (say a disk or disk parition) is mounted

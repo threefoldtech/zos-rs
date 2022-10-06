@@ -18,7 +18,7 @@ impl Error {
     // from command output.
     pub fn new<E: AsRef<str>>(code: i32, stderr: Option<E>) -> Error {
         Error::Exit {
-            code: code,
+            code,
             stderr: match stderr {
                 None => Vec::default(),
                 Some(msg) => msg.as_ref().into(),

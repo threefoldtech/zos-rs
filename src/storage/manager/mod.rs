@@ -45,7 +45,7 @@ where
             pool_mgr,
             ssds: Vec::default(),
             hdds: Vec::default(),
-            cache: Store::new("storage", 1 * crate::MEGABYTE)
+            cache: Store::new("storage", crate::MEGABYTE)
                 .await
                 .context("failed to initialize storage disk type cache")?,
             ssd_size: 0,
@@ -89,7 +89,7 @@ where
 
         let usage = up.usage().await?;
 
-        if up.volumes().await?.len() == 0 {
+        if up.volumes().await?.is_empty() {
             pool.into_down().await?;
         }
 
@@ -207,7 +207,7 @@ where
                 _ => continue,
             };
 
-            volumes.extend(up.volumes().await?.iter().map(|v| VolumeInfo::from(v)));
+            volumes.extend(up.volumes().await?.iter().map(VolumeInfo::from));
         }
 
         Ok(volumes)
@@ -220,15 +220,10 @@ where
                 _ => continue,
             };
 
-            let vol = up
-                .volumes()
-                .await?
-                .into_iter()
-                .filter(|v| v.name() == name.as_ref())
-                .next();
-
-            if let Some(vol) = vol {
-                return Ok((&vol).into());
+            match up.volume(&name).await {
+                Ok(vol) => return Ok((&vol).into()),
+                Err(pool::Error::VolumeNotFound { .. }) => continue,
+                Err(err) => return Err(err.into()),
             }
         }
 
@@ -271,7 +266,6 @@ where
                 Ok(_) => {
                     // volume was deleted we can return here or just try the rest to make sure
                     // TODO: bring the pool down if there are no more volumes
-                    ()
                 }
                 Err(pool::Error::VolumeNotFound { .. }) => continue,
                 Err(err) => return Err(err.into()),
@@ -301,7 +295,7 @@ where
             let path = vol.path().join(name.as_ref());
             if let Ok(meta) = tokio::fs::metadata(&path).await {
                 return Ok(DiskInfo {
-                    path: path,
+                    path,
                     size: meta.len(),
                 });
             }
@@ -399,11 +393,13 @@ where
     async fn disk_expand<S: AsRef<str> + Send + Sync>(&self, name: S, size: Unit) -> Result<()> {
         // expand disk size
         let disk = self.disk_lookup(name).await?;
-        if size < disk.size {
-            return Err(super::Error::InvalidSize { size });
-        } else if disk.size == size {
-            return Ok(());
-        }
+
+        use std::cmp::Ordering;
+        match size.cmp(&disk.size) {
+            Ordering::Less => return Err(super::Error::InvalidSize { size }),
+            Ordering::Equal => return Ok(()),
+            _ => (),
+        };
 
         mkdisk(disk.path, size).await
     }

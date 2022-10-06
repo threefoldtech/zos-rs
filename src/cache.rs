@@ -58,8 +58,6 @@ impl<T> Store<T> {
     /// it's created
     pub async fn new<S: AsRef<str>>(name: S, _size: Unit) -> Result<Self> {
         let path = std::env::temp_dir().join(name.as_ref());
-        let _ = tokio::fs::remove_dir_all(&path).await;
-        tokio::fs::create_dir_all(&path).await?;
         Ok(Store {
             path,
             phantom: PhantomData::default(),
@@ -79,6 +77,10 @@ impl<T: Display> Store<T> {
 
 impl<T: FromStr> Store<T> {
     pub async fn get<S: AsRef<OsStr>>(&self, key: S) -> Result<Option<T>> {
+        // cache is not enabled during testing.
+        if cfg!(test) {
+            return Ok(None);
+        }
         let path = self.path.join(key.as_ref());
         let data = match tokio::fs::read(&path).await {
             Ok(data) => data,

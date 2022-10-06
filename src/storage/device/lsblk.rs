@@ -31,11 +31,11 @@ impl Device for LsblkDevice {
     }
 
     fn filesystem(&self) -> Option<&str> {
-        self.filesystem.as_ref().map(|v| v.as_str())
+        self.filesystem.as_deref()
     }
 
     fn label(&self) -> Option<&str> {
-        self.label.as_ref().map(|v| v.as_str())
+        self.label.as_deref()
     }
 
     fn rota(&self) -> bool {
