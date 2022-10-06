@@ -95,12 +95,10 @@ impl<'de> Deserialize<'de> for MountOptions {
         Ok(MountOptions {
             mode: if opts.read_only {
                 MountMode::ReadOnly
+            } else if opts.persisted_volume.is_empty() {
+                MountMode::ReadWrite(WriteLayer::Size(opts.limit))
             } else {
-                if opts.persisted_volume.is_empty() {
-                    MountMode::ReadWrite(WriteLayer::Size(opts.limit))
-                } else {
-                    MountMode::ReadWrite(WriteLayer::Path(opts.persisted_volume))
-                }
+                MountMode::ReadWrite(WriteLayer::Path(opts.persisted_volume))
             },
             storage: if !opts.storage.is_empty() {
                 Some(opts.storage)

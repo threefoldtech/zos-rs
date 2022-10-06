@@ -1,4 +1,4 @@
-use super::{Device, DeviceManager};
+use super::{Device, DeviceManager, DeviceType, Filesystem};
 use crate::system::{Command, Executor};
 use crate::Unit;
 use anyhow::{Context, Result};
@@ -19,7 +19,7 @@ pub struct LsblkDevice {
 
 impl Device for LsblkDevice {
     fn path(&self) -> &Path {
-        self.path.as_path()
+        &self.path
     }
 
     fn size(&self) -> Unit {
@@ -31,11 +31,11 @@ impl Device for LsblkDevice {
     }
 
     fn filesystem(&self) -> Option<&str> {
-        self.filesystem.as_ref().map(|v| v.as_str())
+        self.filesystem.as_deref()
     }
 
     fn label(&self) -> Option<&str> {
-        self.label.as_ref().map(|v| v.as_str())
+        self.label.as_deref()
     }
 
     fn rota(&self) -> bool {
@@ -47,6 +47,12 @@ impl Device for LsblkDevice {
 struct Devices {
     #[serde(rename = "blockdevices")]
     devices: Vec<LsblkDevice>,
+}
+
+#[derive(Deserialize)]
+struct SeekOutput {
+    #[serde(rename = "type")]
+    typ: DeviceType,
 }
 
 #[derive(Debug)]
@@ -145,12 +151,55 @@ where
             .context("failed to shutdown device")?;
         Ok(())
     }
+
+    async fn seektime(&self, device: &Self::Device) -> Result<DeviceType> {
+        let cmd = Command::new("seektime").arg("-j").arg(device.path());
+
+        let output =
+            self.exec.run(&cmd).await.with_context(|| {
+                format!("failed to run seektime for device: {:?}", device.path())
+            })?;
+
+        let output: SeekOutput =
+            serde_json::from_slice(&output).context("failed to decode seektime output")?;
+
+        Ok(output.typ)
+    }
+
+    async fn format(
+        &self,
+        device: Self::Device,
+        _filesystem: Filesystem,
+        force: bool,
+    ) -> Result<Self::Device> {
+        // only btrfs is supported atm
+        //let cmd
+        let id = uuid::Uuid::new_v4();
+        let mut cmd = Command::new("mkfs.btrfs")
+            .arg("-L")
+            .arg(id.hyphenated().to_string());
+        if force {
+            cmd = cmd.arg("-f");
+        }
+
+        cmd = cmd.arg(device.path());
+
+        self.exec
+            .run(&cmd)
+            .await
+            .with_context(|| format!("failed to run seektime for device: {:?}", device.path()))?;
+
+        self.device(device.path()).await
+    }
 }
 
 #[cfg(test)]
 mod test {
     use super::{DeviceManager, LsBlk};
-    use crate::{storage::device::Device, system::Command};
+    use crate::{
+        storage::device::{Device, DeviceType},
+        system::Command,
+    };
     use std::path::Path;
 
     const LSBLK_LIST_VALID: &str = r#"{
@@ -343,5 +392,54 @@ mod test {
 
         lsblk.shutdown(&device).await.unwrap();
         lsblk.exec.checkpoint();
+    }
+
+    #[tokio::test]
+    async fn lsblk_seektime() {
+        let mut exec = crate::system::MockExecutor::default();
+        let cmd = Command::new("lsblk")
+            .arg("--json")
+            .arg("-o")
+            .arg("PATH,NAME,SIZE,SUBSYSTEMS,FSTYPE,LABEL,ROTA")
+            .arg("--bytes")
+            .arg("--exclude")
+            .arg("1,2,11");
+
+        exec.expect_run()
+            .withf(move |arg: &Command| arg == &cmd)
+            .times(1)
+            .returning(|_: &Command| Ok(Vec::from(LSBLK_LIST_VALID)));
+
+        //mut is only needed for the checkpoint
+        let mut lsblk = LsBlk::new(exec);
+
+        let device = lsblk
+            .labeled("5ecdbb3c-b687-4048-b505-7a6756c2de76")
+            .await
+            .expect("failed to get device");
+        lsblk.exec.checkpoint();
+
+        let path = Path::new("/dev/sdb");
+        assert!(device.path() == path);
+
+        let cmd = Command::new("seektime").arg("-j").arg(device.path());
+
+        lsblk
+            .exec
+            .expect_run()
+            .withf(move |arg: &Command| arg == &cmd)
+            .times(1)
+            .returning(|_: &Command| Ok(Vec::from(r#"{"type": "ssd"}"#)));
+
+        let typ = lsblk.seektime(&device).await.unwrap();
+        lsblk.exec.checkpoint();
+
+        assert!(typ == DeviceType::SSD);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn lsblk_format() {
+        //todo!
     }
 }
