@@ -1,27 +1,27 @@
+use anyhow::Result;
+use app::App;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use std::error::Error;
 use std::io;
 use std::time::{Duration, Instant};
 use tui::backend::{Backend, CrosstermBackend};
 use tui::Terminal;
 
-use app::App;
-
 mod app;
 mod ui;
 
-pub async fn run() -> Result<(), Box<dyn Error>> {
+pub async fn run<S: AsRef<str>>(broker: S) -> Result<()> {
     // initialize stubs
-    let client = rbus::Client::new("redis://0.0.0.0:6379").await.unwrap();
+    let client = rbus::Client::new(broker.as_ref()).await.unwrap();
 
     let tick_rate = Duration::from_millis(250);
 
     // setup terminal
     enable_raw_mode()?;
+
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);

@@ -1,26 +1,77 @@
 mod modules;
 
-use clap_v3::App;
+use clap::{Parser, Subcommand};
 use std::error::Error;
+use std::path::Path;
+/// binary name of zos this one need to always match the one defined in cargo.toml
+/// todo! find a way to read this in compile time.
+const BIN_NAME: &str = "zos";
+const GIT_VERSION: &str =
+    git_version::git_version!(args = ["--tags", "--always", "--dirty=-modified"]);
+
+#[derive(Parser)]
+#[command(author, version = GIT_VERSION, about, long_about = None)]
+struct Cli {
+    /// Enable debug mode
+    #[arg(short, long, global = true)]
+    debug: bool,
+
+    /// zbus broker
+    #[arg(short, long, global = true, default_value_t = String::from("redis://127.0.0.1:6379"))]
+    broker: String,
+
+    /// Sub command
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// run zos ZUI
+    ZUI,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let matches = App::new("Zero-OS")
-    .version("1.0")
-    .about("0-OS is an autonomous operating system design to expose raw compute, storage and network capacity.")
-    .subcommand(
-            App::new("zui")
-                .about("Show Zero os UI")
-                .version("1.0")
+    // read the name of the executable
+    let first = std::env::args_os()
+        .map(|v| Path::new(&v).file_name().unwrap().to_owned())
+        .next();
 
-        )
-        .get_matches();
-
-    match matches.subcommand() {
-        ("zui", Some(_sub_m)) => modules::zui::run().await?,
-        _ => {
-            println!("Welcome to zos, please supply subcommand or --help or more info")
+    // this is to support linking a subcommand to zos binary and execute
+    // the subcommand directly
+    // ln -s zos zui
+    // this running ./zui will run zui subcommand directly
+    let args = match first {
+        Some(v) if v == BIN_NAME => Cli::parse(),
+        Some(v) => {
+            let i = [BIN_NAME.into(), v]
+                .into_iter()
+                .chain(std::env::args_os().skip(1));
+            Cli::parse_from(i)
         }
+        None => Cli::parse(),
+    };
+
+    let mut level = log::LevelFilter::Info;
+    if args.debug {
+        level = log::LevelFilter::Debug;
     }
+
+    simple_logger::SimpleLogger::new()
+        .with_utc_timestamps()
+        .with_level(level)
+        .init()
+        .unwrap();
+
+    let result = match args.command {
+        Commands::ZUI => modules::zui::run(&args.broker).await,
+    };
+
+    if let Err(err) = result {
+        log::error!("{}", err);
+        std::process::exit(1);
+    }
+
     Ok(())
 }

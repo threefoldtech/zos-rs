@@ -11,6 +11,8 @@ path ="src/mod.rs"
 path = "src/bin/main.rs"
 name = "zos"
 
+[build-dependencies]
+
 [dependencies]
 rbus = {git="https://github.com/threefoldtech/rbus", branch="main"}
 async-trait = "0.1.51"
@@ -24,7 +26,7 @@ log = "0.4"
 ipnet = "2.5.0"
 bytes = "1.2.1"
 serde_bytes = "0.11.5"
-clap-v3 = "3.0.0-beta.1"
+clap = {version = "4.0.10", features = ["derive"] }
 lazy_static = "1.4.0"
 shlex = "1.1.0"
 thiserror = "1.0"
@@ -33,6 +35,8 @@ semver = "1.0.13"
 nix = "0.25.0"
 uuid = { version = "1.1", features = ["v4"] }
 ioctls = "0.6"
+simple_logger = "2.3"
+git-version = { version = "0.3.5" }
 
 [dev-dependencies]
 hex = "0.4.3"
