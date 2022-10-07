@@ -39,8 +39,8 @@ pub enum Error {
         device: PathBuf,
         reason: InvalidDevice,
     },
-    #[error("invalid filesystem on device {device}")]
-    InvalidFilesystem { device: PathBuf },
+    #[error("invalid filesystem on device {device} ({filesystem})")]
+    InvalidFilesystem { device: PathBuf, filesystem: String },
     #[error("invalid volume {volume}")]
     InvalidVolume { volume: PathBuf },
     #[error("volume does not have associated qgroup")]
@@ -48,11 +48,11 @@ pub enum Error {
     #[error("operation not support")]
     Unsupported,
 
-    #[error("external operation failed with error: {0}")]
+    #[error("external operation failed with error: {0:#}")]
     SystemError(#[from] crate::system::Error),
     //todo: add more errors based on progress
     // cover it all error
-    #[error("{0}")]
+    #[error("{0:#}")]
     Other(#[from] anyhow::Error),
 }
 

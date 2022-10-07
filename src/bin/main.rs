@@ -29,6 +29,9 @@ struct Cli {
 enum Commands {
     /// run zos ZUI
     ZUI,
+    /// run storage daemon
+    #[command(name = "storaged")]
+    Storage,
 }
 
 #[tokio::main]
@@ -66,10 +69,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let result = match args.command {
         Commands::ZUI => modules::zui::run(&args.broker).await,
+        Commands::Storage => modules::storage::run(&args.broker).await,
     };
 
     if let Err(err) = result {
-        log::error!("{}", err);
+        log::error!("{:#}", err);
         std::process::exit(1);
     }
 

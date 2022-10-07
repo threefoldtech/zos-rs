@@ -128,7 +128,7 @@ where
         self.sys.mount(
             Some(self.device.path()),
             &path,
-            Option::<&str>::None,
+            self.device.filesystem(),
             nix::mount::MsFlags::empty(),
             Option::<&str>::None,
         )?;
@@ -305,10 +305,10 @@ where
             reason: InvalidDevice::InvalidPath,
         })?;
 
-        // todo!: create btrfs filesystem and also enable quota
         if device.filesystem().is_none() || device.label().is_none() {
             return Err(Error::InvalidFilesystem {
                 device: device.path().into(),
+                filesystem: "no-filesystem".into(),
             });
         }
 
@@ -346,6 +346,12 @@ where
     }
 }
 
+impl Default for BtrfsManager<crate::system::System, crate::system::System> {
+    fn default() -> Self {
+        BtrfsManager::new(crate::system::System, crate::system::System)
+    }
+}
+
 #[async_trait::async_trait]
 impl<E, S, M> PoolManager<M, BtrfsUpPool<E, S, M::Device>, BtrfsDownPool<E, S, M::Device>>
     for BtrfsManager<E, S>
@@ -371,9 +377,10 @@ where
                     });
                 }
             }
-            _ => {
+            Some(fs) => {
                 return Err(Error::InvalidFilesystem {
                     device: device.path().into(),
+                    filesystem: fs.into(),
                 })
             }
         };
@@ -424,6 +431,7 @@ impl<E: Executor + 'static> BtrfsUtils<E> {
             Err(ExecError::Exit { code, stderr })
                 if code == 1
                     && String::from_utf8_lossy(&stderr)
+                        .trim()
                         .starts_with("ERROR: target path already exists:") =>
             {
                 return Err(Error::VolumeAlreadyExists {
@@ -455,7 +463,9 @@ impl<E: Executor + 'static> BtrfsUtils<E> {
             Ok(output) => output,
             Err(ExecError::Exit { code, stderr })
                 if code == 1
-                    && String::from_utf8_lossy(&stderr).ends_with("No such file or directory") =>
+                    && String::from_utf8_lossy(&stderr)
+                        .trim()
+                        .ends_with("No such file or directory") =>
             {
                 return Err(Error::VolumeNotFound {
                     volume: name.as_ref().into(),

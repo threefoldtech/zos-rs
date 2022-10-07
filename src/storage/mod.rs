@@ -42,13 +42,13 @@ pub enum Error {
     #[error("invalid size cannot be '{size}'")]
     InvalidSize { size: Unit },
 
-    #[error("pool error: {0}")]
+    #[error("pool error: {0:#}")]
     Pool(#[from] pool::Error),
 
-    #[error("io error: {0}")]
+    #[error("io error: {0:#}")]
     IO(#[from] std::io::Error),
 
-    #[error("unknown error: {0}")]
+    #[error("unknown error: {0:#}")]
     Other(#[from] anyhow::Error),
 }
 
@@ -105,7 +105,8 @@ pub trait Manager {
     async fn volumes(&self) -> Result<Vec<VolumeInfo>>;
     /// look up volume by name
     async fn volume_lookup<S: AsRef<str> + Send + Sync>(&self, name: S) -> Result<VolumeInfo>;
-    /// create a new volume with given size
+    /// create a new volume with given size. if volume already exist, volume
+    /// is returned (and size does not change)
     async fn volume_create<S: AsRef<str> + Send + Sync>(
         &mut self,
         name: S,

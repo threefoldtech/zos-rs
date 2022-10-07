@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct Child {
+    name: String,
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LsblkDevice {
     // hold data here
     path: PathBuf,
@@ -15,6 +19,7 @@ pub struct LsblkDevice {
     filesystem: Option<String>,
     label: Option<String>,
     rota: bool,
+    children: Option<Vec<Child>>,
 }
 
 impl Device for LsblkDevice {
@@ -31,6 +36,10 @@ impl Device for LsblkDevice {
     }
 
     fn filesystem(&self) -> Option<&str> {
+        if self.children.is_some() {
+            return Some("partitions");
+        }
+
         self.filesystem.as_deref()
     }
 
@@ -187,7 +196,7 @@ where
         self.exec
             .run(&cmd)
             .await
-            .with_context(|| format!("failed to run seektime for device: {:?}", device.path()))?;
+            .with_context(|| format!("failed to format device: {}", device.path().display()))?;
 
         self.device(device.path()).await
     }

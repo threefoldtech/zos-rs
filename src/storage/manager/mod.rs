@@ -103,8 +103,8 @@ where
                 Ok(typ) => typ,
                 Err(err) => {
                     log::error!(
-                        "failed to detect device '{:?}' type: {}",
-                        device.path(),
+                        "failed to detect device '{}' type: {:#}",
+                        device.path().display(),
                         err
                     );
                     continue;
@@ -114,7 +114,7 @@ where
             let mut pool = match self.pool_mgr.get(&self.device_mgr, device).await {
                 Ok(pool) => pool,
                 Err(err) => {
-                    log::error!("failed to initialize pool for device: {}", err);
+                    log::error!("failed to initialize pool for device: {:#}", err);
                     // store error for reference ?
                     continue;
                 }
@@ -124,7 +124,7 @@ where
                 Ok(usage) => usage,
                 Err(err) => {
                     // invalid pool
-                    log::error!("failed to validate pool '{}': {}", pool.name(), err);
+                    log::error!("failed to validate pool '{}': {:#}", pool.name(), err);
                     // add to broken pools list.
                     continue;
                 }
@@ -179,7 +179,7 @@ where
             let up = match pool.into_up().await {
                 Ok(up) => up,
                 Err(err) => {
-                    log::error!("failed to bring pool up: {}", err);
+                    log::error!("failed to bring pool up: {:#}", err);
                     continue;
                 }
             };
@@ -286,7 +286,11 @@ where
                 Ok(vol) => vol,
                 Err(pool::Error::VolumeNotFound { .. }) => continue,
                 Err(err) => {
-                    log::error!("failed to list volumes from pool '{}': {}", up.name(), err);
+                    log::error!(
+                        "failed to list volumes from pool '{}': {:#}",
+                        up.name(),
+                        err
+                    );
                     continue;
                 }
             };
@@ -344,7 +348,11 @@ where
                 Ok(vol) => vol,
                 Err(pool::Error::VolumeNotFound { .. }) => continue,
                 Err(err) => {
-                    log::error!("failed to list volumes from pool '{}': {}", up.name(), err);
+                    log::error!(
+                        "failed to list volumes from pool '{}': {:#}",
+                        up.name(),
+                        err
+                    );
                     continue;
                 }
             };
@@ -356,7 +364,7 @@ where
                     Ok(meta) => meta,
                     Err(err) => {
                         log::error!(
-                            "failed to get disk information '{}': {}",
+                            "failed to get disk information '{}': {:#}",
                             path.display(),
                             err
                         );
@@ -445,7 +453,7 @@ where
                 Ok(vol) => vol,
                 Err(pool::Error::VolumeNotFound { .. }) => continue,
                 Err(err) => {
-                    log::error!("failed to get volume: {}", err);
+                    log::error!("failed to get volume: {:#}", err);
                     continue;
                 }
             };
@@ -477,7 +485,7 @@ where
                 Ok(vol) => vol,
                 Err(pool::Error::VolumeNotFound { .. }) => continue,
                 Err(err) => {
-                    log::error!("failed to get volume: {}", err);
+                    log::error!("failed to get volume: {:#}", err);
                     continue;
                 }
             };

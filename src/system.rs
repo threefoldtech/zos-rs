@@ -9,7 +9,7 @@ use tokio::process::Command as TokioCommand;
 pub enum Error {
     Spawn(#[from] std::io::Error),
     Exit { code: i32, stderr: Vec<u8> },
-    Unix(#[from] nix::Error),
+    Syscall(#[from] nix::Error),
 }
 
 impl Error {
@@ -34,14 +34,14 @@ impl Display for Error {
                 ref code,
                 ref stderr,
             } => {
-                let msg = String::from_utf8(stderr.clone()).map_err(|_| std::fmt::Error)?;
+                let msg = String::from_utf8_lossy(stderr);
                 write!(f, "error-code: {} - message: {}", code, msg)
             }
             Error::Spawn(ref err) => {
                 write!(f, "failed to spawn command: {}", err)
             }
-            Error::Unix(ref err) => {
-                write!(f, "{}", err)
+            Error::Syscall(ref err) => {
+                write!(f, "system-call: {}", err)
             }
         }
     }
@@ -127,6 +127,8 @@ pub struct System;
 #[async_trait::async_trait]
 impl Executor for System {
     async fn run(&self, cmd: &Command) -> Result<Vec<u8>, Error> {
+        log::debug!("running command: {}", cmd);
+
         let mut cmd: TokioCommand = cmd.into();
         let out = cmd.output().await?;
         if !out.status.success() {
@@ -149,6 +151,12 @@ impl Syscalls for System {
         flags: MsFlags,
         data: Option<D>,
     ) -> Result<(), Error> {
+        log::debug!(
+            "mount({:?}, {:?})",
+            source.as_ref().map(|s| s.as_ref()),
+            target.as_ref()
+        );
+
         nix::mount::mount(
             source.as_ref().map(|v| v.as_ref()),
             target.as_ref(),
@@ -157,7 +165,6 @@ impl Syscalls for System {
             data.as_ref().map(|d| d.as_ref()),
         )?;
 
-        //nix::mount::umount2(target, flags)
         Ok(())
     }
 
