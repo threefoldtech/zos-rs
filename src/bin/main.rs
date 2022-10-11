@@ -5,10 +5,9 @@ use std::error::Error;
 use std::path::Path;
 
 const BIN_NAME: &str = env!("CARGO_BIN_NAME");
-include!(concat!(env!("OUT_DIR"), "/version.rs"));
 
 #[derive(Parser)]
-#[command(author, version = GIT_VERSION, about, long_about = None)]
+#[command(author, version = env!("GIT_VERSION"), about, long_about = None)]
 struct Cli {
     /// Enable debug mode
     #[arg(short, long, global = true)]
