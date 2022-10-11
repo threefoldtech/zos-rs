@@ -12,6 +12,7 @@ path = "src/bin/main.rs"
 name = "zos"
 
 [build-dependencies]
+git-version = { version = "0.3.5" }
 
 [dependencies]
 rbus = {git="https://github.com/threefoldtech/rbus", branch="main"}
@@ -36,7 +37,7 @@ nix = "0.25.0"
 uuid = { version = "1.1", features = ["v4"] }
 ioctls = "0.6"
 simple_logger = "2.3"
-git-version = { version = "0.3.5" }
+
 
 [dev-dependencies]
 hex = "0.4.3"

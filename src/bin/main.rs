@@ -3,11 +3,9 @@ mod modules;
 use clap::{Parser, Subcommand};
 use std::error::Error;
 use std::path::Path;
-/// binary name of zos this one need to always match the one defined in cargo.toml
-/// todo! find a way to read this in compile time.
-const BIN_NAME: &str = "zos";
-const GIT_VERSION: &str =
-    git_version::git_version!(args = ["--tags", "--always", "--dirty=-modified"]);
+
+const BIN_NAME: &str = env!("CARGO_BIN_NAME");
+include!(concat!(env!("OUT_DIR"), "/version.rs"));
 
 #[derive(Parser)]
 #[command(author, version = GIT_VERSION, about, long_about = None)]
