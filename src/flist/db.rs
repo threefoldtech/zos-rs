@@ -2,9 +2,8 @@ use anyhow::{bail, Result};
 use futures::StreamExt;
 use md5::{Digest, Md5};
 use std::path::{Path, PathBuf};
-use tokio::fs;
-use tokio::io::{self, AsyncWriteExt};
-use uuid::Uuid;
+use tokio::fs::{self, File};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 pub struct MetadataDbMgr {
     // root directory where all
     // the working file of the module will be located
@@ -21,35 +20,40 @@ impl MetadataDbMgr {
         })
     }
 
-    pub async fn get<T: AsRef<str>>(&self, url: T) -> Result<PathBuf> {
+    pub async fn get<T: AsRef<str>>(&self, url: T) -> Result<(String, PathBuf)> {
         let url = url.as_ref();
         let hash = self.hash_of_flist(url).await?;
         let path = self.flist.join(&hash);
-        match fs::File::open(&path).await {
-            Ok(_) => {
-                //Flist already exists let's check it's md5
-                if self.compare_md5(&hash, &path) {
-                    Ok(path)
-                } else {
-                    self.download_flist(url, &hash).await
-                }
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                self.download_flist(url, &hash).await
-            }
 
-            Err(error) => bail!(
-                "error reading flist file: {}, error {}",
-                &path.display(),
-                error
-            ),
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)
+            .await?;
+        if file.metadata().await?.len() == 0 || !self.compare_md5(&hash, &mut file).await {
+            self.download_flist(url, &hash, &mut file).await
+        } else {
+            Ok((hash, path))
         }
     }
 
-    fn compare_md5<T: AsRef<str>, P: AsRef<Path>>(&self, hash: T, path: P) -> bool {
-        // create a Md5 hasher instance
-        let calculated_hash =
-            checksums::hash_file(path.as_ref(), checksums::Algorithm::MD5).to_lowercase();
+    async fn compare_md5<T: AsRef<str>>(&self, hash: T, file: &mut File) -> bool {
+        let mut buffer = [0; 4096];
+
+        let mut hasher = Md5::new();
+        loop {
+            if let Ok(n) = file.read(&mut buffer).await {
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..n]);
+            } else {
+                return false;
+            }
+        }
+        let result = hasher.finalize();
+        let calculated_hash = base16ct::lower::encode_string(&result);
         calculated_hash == hash.as_ref()
     }
 
@@ -61,24 +65,14 @@ impl MetadataDbMgr {
         &self,
         url: T,
         hash_from_url: H,
-    ) -> Result<PathBuf> {
+        file: &mut File,
+    ) -> Result<(String, PathBuf)> {
         let url = url.as_ref();
         // Flist not found or hash is not correct, let's download
         let mut resp = reqwest::get(url).await?.bytes_stream();
-        // let mut reader = StreamReader::new(
-        //     resp.bytes_stream()
-        //         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)),
-        // );
         let mut hasher = Md5::new();
-        let fname = Uuid::new_v4().simple();
-        let tmp_path = self.flist.join(&fname.to_string());
-        let mut tmp_file = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .open(&tmp_path)
-            .await?;
         while let Some(Ok(v)) = resp.next().await {
-            tmp_file.write_all(&v).await?;
+            file.write_all(&v).await?;
             hasher.update(&v);
         }
         let result = hasher.finalize();
@@ -87,8 +81,7 @@ impl MetadataDbMgr {
             bail!("failed to download flist, incompatible hash")
         }
         let path = self.flist.join(&hash);
-        fs::rename(tmp_path, &path).await?;
-        Ok(path)
+        Ok((hash, path))
     }
 
     // get's flist hash from hub
@@ -109,18 +102,20 @@ mod test {
     use std::ffi::OsStr;
     use tokio::fs;
     #[tokio::test]
-    async fn get() {
+    async fn test_get() {
         let metadata_mgr = MetadataDbMgr::new("/tmp/flist_test").await.unwrap();
 
         fs::create_dir_all("/tmp/flist_test").await.unwrap();
         let url = "https://hub.grid.tf/ashraf.3bot/ashraffouda-mattermost-latest.flist";
-        let path = metadata_mgr.get(url).await.unwrap();
+        let (_, path) = metadata_mgr.get(url).await.unwrap();
         let filename = metadata_mgr.hash_of_flist(url).await.unwrap();
         // make sure the downloaded file matches the hash of this flist
         assert_eq!(Some(OsStr::new(&filename)), path.file_name());
-        let first_file_created = fs::metadata(&path).await.unwrap().created().unwrap();
-        let path = metadata_mgr.get(url).await.unwrap();
-        let second_file_created = fs::metadata(&path).await.unwrap().created().unwrap();
+        let first_file_created = fs::metadata(&path).await.unwrap().modified().unwrap();
+
+        // get the flist again shouldn't download it from the beggining
+        let (_, path) = metadata_mgr.get(url).await.unwrap();
+        let second_file_created = fs::metadata(&path).await.unwrap().modified().unwrap();
         // make sure the second file is not created because it is the same file
         assert_eq!(first_file_created, second_file_created);
         fs::remove_dir_all("/tmp/flist_test").await.unwrap();

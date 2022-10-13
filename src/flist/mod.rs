@@ -10,9 +10,9 @@ use crate::bus::types::storage::WriteLayer;
 use crate::system::Executor;
 use crate::system::Syscalls;
 
+use crate::env;
 use anyhow::bail;
 use anyhow::Result;
-use std::path::Path;
 use std::path::PathBuf;
 use tokio::fs;
 
@@ -68,7 +68,10 @@ where
             bail!("invalid mountpoint {}", &mountpoint.display())
         }
 
-        let ro_mount_path = self.mount_mgr.mount_ro(&url, opts.storage.clone()).await?;
+        let ro_mount_path = self
+            .mount_mgr
+            .mount_ro(&url, opts.storage.unwrap_or(env::get()?.storage_url))
+            .await?;
 
         match &opts.mode {
             MountMode::ReadOnly => {
@@ -80,7 +83,7 @@ where
             MountMode::ReadWrite(write_layer) => {
                 let rw = match write_layer {
                     WriteLayer::Size(size) => self.mount_mgr.get_volume_path(name, *size).await?,
-                    WriteLayer::Path(path) => PathBuf::from(&path),
+                    WriteLayer::Path(path) => path.to_path_buf(),
                 };
 
                 self.mount_mgr
