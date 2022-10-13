@@ -145,7 +145,7 @@ where
 #[cfg(test)]
 mod test {
 
-    use super::{FListDaemon, MountManager};
+    use super::FListDaemon;
     use crate::bus::api::Flist;
     use crate::bus::types::storage::{MountMode, MountOptions};
     use crate::{

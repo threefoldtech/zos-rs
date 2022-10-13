@@ -4,8 +4,8 @@ use anyhow::{Ok, Result};
 
 use crate::Unit;
 pub struct Usage {
-    size: Unit,
-    used: Unit,
+    _size: Unit,
+    _used: Unit,
 }
 
 // Volume struct is a btrfs subvolume
@@ -38,11 +38,11 @@ pub trait VolumeAllocator {
 pub struct MockVolumeAllocator;
 
 impl VolumeAllocator for MockVolumeAllocator {
-    fn volume_create<S: AsRef<str>>(&self, name: S, size: Unit) -> Result<Volume> {
+    fn volume_create<S: AsRef<str>>(&self, name: S, _size: Unit) -> Result<Volume> {
         return Ok(Volume {
             name: name.as_ref().to_string(),
             path: PathBuf::from("/volumes/vol1"),
-            usage: Usage { size, used: 0 },
+            usage: Usage { _size, _used: 0 },
         });
     }
 
@@ -58,7 +58,10 @@ impl VolumeAllocator for MockVolumeAllocator {
         return Ok(Volume {
             name: name.as_ref().to_string(),
             path: PathBuf::from("/volumes/vol1"),
-            usage: Usage { size: 100, used: 0 },
+            usage: Usage {
+                _size: 100,
+                _used: 0,
+            },
         });
     }
 }

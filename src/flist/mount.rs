@@ -327,7 +327,6 @@ mod test {
 
     use std::path::{Path, PathBuf};
 
-    use anyhow::bail;
     use nix::mount::{MntFlags, MsFlags};
 
     use super::MountManager;
