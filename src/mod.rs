@@ -7,6 +7,7 @@ pub mod kernel;
 pub mod storage;
 pub mod system;
 pub mod versioned;
+pub mod zinit;
 
 // Unit is a size measuring unit 1 unit = 1 byte
 pub type Unit = u64;
