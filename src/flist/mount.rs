@@ -1,15 +1,13 @@
 use super::db::MetadataDbMgr;
 use super::volume_allocator::VolumeAllocator;
-use crate::env;
 use crate::storage;
 use crate::system::{Command, Executor, Syscalls};
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{self};
+use std::io;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use tokio::time;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum FsType {
@@ -125,38 +123,17 @@ where
         }
     }
 
-    async fn wait_mountpoint<P: AsRef<Path>>(&self, path: P, seconds: u32) -> Result<()> {
-        let mut duration = seconds;
-        while duration > 0 {
-            time::sleep(time::Duration::from_secs(1)).await;
-            if self.is_mounted(path.as_ref()).await {
-                return Ok(());
-            }
-            duration -= 1;
-        }
-
-        bail!("{}, was not mounted in time", path.as_ref().display())
-    }
-
     // MountRO mounts an flist in read-only mode. This mount then can be shared between multiple rw mounts
     // TODO: how to know that this ro mount is no longer used, hence can be unmounted and cleaned up?
     // this mounts the downloaded flish under <FLISTS_ROOT>/ro/<FLIST_HASH>
     pub async fn mount_ro<T: AsRef<str>, W: AsRef<str>>(
         &self,
         url: T,
-        storage_url: Option<W>,
+        storage_url: W,
     ) -> Result<PathBuf> {
         // this should return always the flist mountpoint. which is used
         // as a base for all RW mounts.
-        let flist_path = self.db.get(url).await?;
-
-        let hash = match flist_path.file_name() {
-            Some(hash) => match hash.to_str() {
-                Some(hash) => hash,
-                None => bail!("failed to get flist hash"),
-            },
-            None => bail!("failed to get flist hash"),
-        };
+        let (hash, flist_path) = self.db.get(url).await?;
 
         let ro_mountpoint = self.flist_ro_mount_path(&hash)?;
         if self.is_mounted(&ro_mountpoint).await {
@@ -167,14 +144,6 @@ where
         }
 
         fs::create_dir_all(&ro_mountpoint).await?;
-        let storage_url = match storage_url {
-            Some(storage_url) => storage_url.as_ref().to_string(),
-            None => {
-                let environ = env::get()?;
-                environ.storage_url
-            }
-        };
-
         let log_name = format!("{}.log", hash);
         let log_path = self.log.join(&log_name);
 
@@ -184,7 +153,7 @@ where
             .arg("--meta")
             .arg(flist_path)
             .arg("--storage-url")
-            .arg(storage_url)
+            .arg(storage_url.as_ref())
             .arg("--daemon")
             .arg("--log")
             .arg(log_path.as_os_str())
@@ -222,7 +191,6 @@ where
             }
             return Ok(false);
         };
-        self.wait_mountpoint(&mountpoint, 3).await?;
         Ok(true)
     }
 
@@ -318,20 +286,17 @@ where
     pub async fn get_volume_path<T: AsRef<str>>(&self, name: T, size: u64) -> Result<PathBuf> {
         // no persisted volume provided, hence
         // we need to create one, or find one that is already exists
-        match self.storage.volume_lookup(&name) {
+        if let Ok(volume) = self.storage.volume_lookup(&name) {
+            return Ok(volume.path);
+        }
+        if size == 0 {
+            bail!("invalid mount option, missing disk type");
+        }
+        match self.storage.volume_create(&name, size) {
             Ok(volume) => Ok(volume.path),
-            Err(_) => {
-                // Volume doesn't exist create a new one
-                if size == 0 {
-                    bail!("invalid mount option, missing disk type");
-                }
-                match self.storage.volume_create(&name, size) {
-                    Ok(volume) => Ok(volume.path),
-                    Err(e) => {
-                        self.storage.volume_delete(&name)?;
-                        bail!(e)
-                    }
-                }
+            Err(e) => {
+                self.storage.volume_delete(&name)?;
+                bail!(e)
             }
         }
     }
@@ -444,7 +409,7 @@ mod test {
         mount_mgr
             .mount_ro(
                 "https://hub.grid.tf/ashraf.3bot/ashraffouda-mattermost-latest.flist",
-                Some(storage_url),
+                storage_url,
             )
             .await
             .unwrap();
