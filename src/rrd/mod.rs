@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use core::time;
 use sqlx::{self, Sqlite};
-use std::{fmt::Write, path::Path};
+use std::path::Path;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -82,13 +82,24 @@ impl<'a> Slot for SqliteSlot<'a> {
             // reported
             value
         };
-        sqlx::query("REPLACE INTO usage (timestamp, metric, value) VALUES (?, ?, ?);")
-            .bind(self.key)
-            .bind(key)
-            .bind(diff)
-            .execute(&mut connection)
-            .await?;
-
+        sqlx::query(
+            "INSERT INTO usage (timestamp, metric, value) VALUES (?, ?, ?)
+                        ON CONFLICT (timestamp, metric)
+                        DO UPDATE
+                        SET value = usage.value + ?",
+        )
+        .bind(self.key)
+        .bind(key)
+        .bind(diff)
+        .bind(diff)
+        .execute(&mut connection)
+        .await?;
+        // sqlx::query("REPLACE INTO usage (timestamp, metric, value) VALUES (?, ?, ?);")
+        // .bind(self.key)
+        // .bind(key)
+        // .bind(diff)
+        // .execute(&mut connection)
+        // .await?;
         Ok(())
     }
 
@@ -190,7 +201,7 @@ impl SqliteRRD {
         })
     }
 
-    pub async fn print<W: Write>(&mut self, mut writer: W) -> Result<W> {
+    pub async fn print<W: std::io::Write>(&self, mut writer: W) -> Result<W> {
         self.print_last_usage(&mut writer).await?;
         let mut connection = self.pool.acquire().await?;
         let timestamps: Vec<i64> = sqlx::query_scalar("SELECT DISTINCT timestamp FROM usage;")
@@ -202,10 +213,10 @@ impl SqliteRRD {
         Ok(writer)
     }
 
-    async fn print_last_usage<W: Write>(&mut self, mut writer: W) -> Result<()> {
+    async fn print_last_usage<W: std::io::Write>(&self, mut writer: W) -> Result<()> {
         let mut connection = self.pool.acquire().await?;
         writer.write_fmt(format_args!(".last\n"))?;
-        let records: Vec<(String, f64)> = sqlx::query_as("SELECT metric, usage FROM last;")
+        let records: Vec<(String, f64)> = sqlx::query_as("SELECT metric, value FROM last;")
             .fetch_all(&mut connection)
             .await?;
         for (metric, usage) in records {
@@ -214,10 +225,11 @@ impl SqliteRRD {
         Ok(())
     }
 
-    async fn print_ts<W: Write>(&mut self, ts: i64, mut writer: W) -> Result<()> {
+    async fn print_ts<W: std::io::Write>(&self, ts: i64, mut writer: W) -> Result<()> {
+        writer.write_fmt(format_args!("print_ts:\n"))?;
         let mut connection = self.pool.acquire().await?;
         let records: Vec<(String, f64)> =
-            sqlx::query_as("SELECT metric, usage FROM usage WHERE timestamp = ? ;")
+            sqlx::query_as("SELECT metric, value FROM usage WHERE timestamp = ? ;")
                 .bind(ts)
                 .fetch_all(&mut connection)
                 .await?;
@@ -393,7 +405,7 @@ mod test {
         let path = file.path();
         let window = time::Duration::from_secs(60);
         let retention = 10 * window;
-        let mut db = crate::rrd::SqliteRRD::new(path, window, retention)
+        let db = crate::rrd::SqliteRRD::new(path, window, retention)
             .await
             .unwrap();
         let now = SystemTime::now();
@@ -425,7 +437,7 @@ mod test {
         let first = now_secs - 20 * window.as_secs() as i64;
         for i in 0..21 {
             let ts = first + i * 60;
-            let mut slot = db.slot_at(ts).await.unwrap();
+            let slot = db.slot_at(ts).await.unwrap();
             slot.counter("test-1", i as f64).await.unwrap();
         }
         let slots = db.slots().await.unwrap();
@@ -439,7 +451,7 @@ mod test {
         let path = file.path();
         let window = time::Duration::from_secs(60);
         let retention = 10 * window;
-        let mut db = crate::rrd::SqliteRRD::new(path, window, retention)
+        let db = crate::rrd::SqliteRRD::new(path, window, retention)
             .await
             .unwrap();
         let now = SystemTime::now();
@@ -481,12 +493,36 @@ mod test {
                 assert_eq!(value, 6.0);
                 total += value;
             }
-            let mut slot = db.slot_at(now_secs + 60 * 5 * i).await.unwrap();
+            let slot = db.slot_at(now_secs + 60 * 5 * i).await.unwrap();
             slot.counter("test-0", (i as f64) + 1.0).await.unwrap();
             if i % 6 == 0 && i != 0 {
                 last_report_time = slot.key().await.unwrap();
             }
         }
         assert_eq!(24.0, total);
+    }
+
+    #[tokio::test]
+    async fn counter_same_window() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path();
+        let window = time::Duration::from_secs(60);
+        let retention = 100 * window;
+        let db = crate::rrd::SqliteRRD::new(path, window, retention)
+            .await
+            .unwrap();
+        let now = SystemTime::now();
+        let now_secs = now.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
+        let slot = db.slot_at(now_secs).await.unwrap();
+        slot.counter("test-0", 0.0).await.unwrap();
+        slot.counter("test-0", 10.0).await.unwrap();
+        slot.counter("test-0", 20.0).await.unwrap();
+
+        let mut counters = db
+            .counters(UNIX_EPOCH + time::Duration::from_secs(now_secs as u64))
+            .await
+            .unwrap();
+        let (_, value) = counters.next().unwrap();
+        assert_eq!(value, 20.0);
     }
 }
