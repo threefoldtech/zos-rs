@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use core::time;
 use sqlx::{self, Sqlite};
-use std::{io::Write, path::Path};
+use std::{fmt::Write, path::Path};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -20,7 +20,7 @@ pub enum Error {
 pub trait Slot {
     /// Counter sets (or overrides) the current stored value for this key,
     /// with value
-    async fn counter(&mut self, key: &str, value: f64) -> Result<()>;
+    async fn counter(&self, key: &str, value: f64) -> Result<()>;
     /// Key return the key of the slot which is the window timestamp
     async fn key(&self) -> Result<i64>;
 }
@@ -30,13 +30,13 @@ pub trait Slot {
 /// then it's easy to compute the increase of this counter over a given window
 /// The database only keep history based on retention.
 #[async_trait]
-pub trait RRD<S, I, 'a>
+pub trait RRD<I, 'a>
 where
-    S: Slot,
-    I: Iterator,
+    I: Iterator<Item = (String, f64)>,
 {
+    type Slot: Slot;
     /// Slot returns the current window (slot) to store values.
-    async fn slot(&'a mut self) -> Result<S>;
+    async fn slot(&'a self) -> Result<Self::Slot>;
     /// Counters, return all stored counters since the given time (since) until now.
     async fn counters(&self, since: std::time::SystemTime) -> Result<I>;
     /// Last returns the last reported value for a metric given the metric
@@ -45,6 +45,7 @@ where
 }
 
 /// SqliteRRD is the [`RRD`] implementation using Sqlite under the hood.
+#[derive(Clone)]
 pub struct SqliteRRD {
     pool: sqlx::Pool<Sqlite>,
     window: i64,
@@ -52,58 +53,15 @@ pub struct SqliteRRD {
 }
 
 /// SqliteSlot is the [`Slot`] implementation using Sqlite under the hood.
+#[derive(Clone)]
 pub struct SqliteSlot<'a> {
-    rrd: &'a mut SqliteRRD,
+    rrd: &'a SqliteRRD,
     key: i64,
-}
-
-struct Counters {
-    index: usize,
-    inner: Vec<Counter>,
-}
-
-pub struct Counter {
-    metric: String,
-    value: f64,
-}
-
-impl Clone for Counter {
-    fn clone(&self) -> Self {
-        Counter {
-            metric: self.metric.clone(),
-            value: self.value,
-        }
-    }
-}
-
-impl Iterator for Counters {
-    type Item = Counter;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index == self.inner.len() {
-            return None;
-        }
-        let ret = self.inner[self.index].clone();
-        self.index += 1;
-        Some(ret)
-    }
-}
-
-impl From<Vec<(String, f64)>> for Counters {
-    fn from(v: Vec<(String, f64)>) -> Self {
-        let mut inner = Vec::new();
-        for r in v {
-            inner.push(Counter {
-                metric: r.0,
-                value: r.1,
-            })
-        }
-        Counters { index: 0, inner }
-    }
 }
 
 #[async_trait]
 impl<'a> Slot for SqliteSlot<'a> {
-    async fn counter(&mut self, key: &str, value: f64) -> Result<()> {
+    async fn counter(&self, key: &str, value: f64) -> Result<()> {
         let mut connection = self.rrd.pool.acquire().await?;
         let last = self.rrd.get_last(key).await?;
         let now = std::time::SystemTime::now()
@@ -141,12 +99,17 @@ impl<'a> Slot for SqliteSlot<'a> {
 }
 
 #[async_trait]
-impl<'a> RRD<SqliteSlot<'a>, Counters, 'a> for SqliteRRD {
+impl<'a> RRD<std::vec::IntoIter<(std::string::String, f64)>, 'a> for SqliteRRD {
+    type Slot = SqliteSlot<'a>;
+
     async fn last(&self, metric: &str) -> Result<Option<f64>> {
         Ok(self.get_last(metric).await?)
     }
 
-    async fn counters(&self, since: std::time::SystemTime) -> Result<Counters> {
+    async fn counters(
+        &self,
+        since: std::time::SystemTime,
+    ) -> Result<std::vec::IntoIter<(std::string::String, f64)>> {
         let mut connection = self.pool.acquire().await?;
         let mut ts = since.duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
         ts = (ts / self.window) * self.window;
@@ -156,10 +119,10 @@ impl<'a> RRD<SqliteSlot<'a>, Counters, 'a> for SqliteRRD {
         .bind(ts)
         .fetch_all(&mut connection)
         .await?;
-        Ok(records.into())
+        Ok(records.into_iter())
     }
 
-    async fn slot(&'a mut self) -> Result<SqliteSlot<'a>> {
+    async fn slot(&'a self) -> Result<SqliteSlot<'a>> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_secs() as i64;
@@ -192,8 +155,8 @@ impl SqliteRRD {
 
         sqlx::query::<Sqlite>(
             "CREATE TABLE IF NOT EXISTS usage (
-                timestamp INTEGER NOT NULL, 
-                metric TEXT NOT NULL, 
+                timestamp INTEGER NOT NULL,
+                metric TEXT NOT NULL,
                 value FLOAT NOT NULL,
                 PRIMARY KEY (timestamp, metric)
                 );",
@@ -203,8 +166,8 @@ impl SqliteRRD {
 
         sqlx::query::<Sqlite>(
             "CREATE TABLE IF NOT EXISTS last (
-                timestamp INTEGER NOT NULL, 
-                metric TEXT NOT NULL UNIQUE, 
+                timestamp INTEGER NOT NULL,
+                metric TEXT NOT NULL UNIQUE,
                 value FLOAT NOT NULL,
                 PRIMARY KEY (timestamp, metric)
                 );",
@@ -227,7 +190,7 @@ impl SqliteRRD {
         })
     }
 
-    async fn print<W: Write>(&mut self, mut writer: W) -> Result<W> {
+    pub async fn print<W: Write>(&mut self, mut writer: W) -> Result<W> {
         self.print_last_usage(&mut writer).await?;
         let mut connection = self.pool.acquire().await?;
         let timestamps: Vec<i64> = sqlx::query_scalar("SELECT DISTINCT timestamp FROM usage;")
@@ -286,7 +249,7 @@ impl SqliteRRD {
     }
 
     /// slots_at returns an [`SqliteSlot`] at some timestamp.
-    async fn slot_at<'a>(&'_ mut self, ts: i64) -> Result<SqliteSlot<'_>> {
+    async fn slot_at<'a>(&'_ self, ts: i64) -> Result<SqliteSlot<'_>> {
         let ts = (ts / self.window) * self.window;
         self.retain(ts).await?;
         Ok(SqliteSlot { rrd: self, key: ts })
@@ -303,7 +266,7 @@ impl SqliteRRD {
     }
 
     /// set_last sets or overwrites the last value for some metric at a timestamp.
-    pub async fn set_last(&mut self, timestamp: i64, metric: &str, value: &f64) -> Result<()> {
+    pub async fn set_last(&self, timestamp: i64, metric: &str, value: &f64) -> Result<()> {
         let mut connection = self.pool.acquire().await?;
         sqlx::query("REPLACE INTO last (timestamp, metric, value) VALUES (?, ?, ?);")
             .bind(timestamp)
@@ -329,14 +292,14 @@ mod test {
         let path = file.path();
         let window = 60 * time::Duration::from_secs(60);
         let retention = 10 * window;
-        let mut db = crate::rrd::SqliteRRD::new(path, window, retention)
+        let db = crate::rrd::SqliteRRD::new(path, window, retention)
             .await
             .unwrap();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-        let mut slot = db.slot().await.unwrap();
+        let slot = db.slot().await.unwrap();
         let key = slot.key().await.unwrap();
         let w = window.as_secs() as i64;
         assert_eq!((now / w) * w, key);
@@ -349,22 +312,22 @@ mod test {
         let path = file.path();
         let window = time::Duration::from_secs(60);
         let retention = 10 * window;
-        let mut db = crate::rrd::SqliteRRD::new(path, window, retention)
+        let db = crate::rrd::SqliteRRD::new(path, window, retention)
             .await
             .unwrap();
         let now = SystemTime::now();
         let now_secs = now.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
         let before_window = now_secs - window.as_secs() as i64;
-        let mut slot_before = db.slot_at(before_window).await.unwrap();
+        let slot_before = db.slot_at(before_window).await.unwrap();
         slot_before.counter("test-1", 100.0).await.unwrap();
-        let mut slot_now = db.slot_at(now_secs).await.unwrap();
+        let slot_now = db.slot_at(now_secs).await.unwrap();
         slot_now.counter("test-1", 120.0).await.unwrap();
         let mut counters = db
             .counters(now.checked_sub(window * 5).unwrap())
             .await
             .unwrap();
-        let counter = counters.next().unwrap();
-        assert_eq!(counter.value, 20.0);
+        let (_, value) = counters.next().unwrap();
+        assert_eq!(value, 20.0);
         assert!(counters.next().is_none());
     }
 
@@ -374,7 +337,7 @@ mod test {
         let path = file.path();
         let window = time::Duration::from_secs(60);
         let retention = 10 * window;
-        let mut db = crate::rrd::SqliteRRD::new(path, window, retention)
+        let db = crate::rrd::SqliteRRD::new(path, window, retention)
             .await
             .unwrap();
         let now = SystemTime::now();
@@ -382,15 +345,15 @@ mod test {
         let first = now_secs - 20 * window.as_secs() as i64;
         for i in 0..20 {
             let ts = first + i * 60;
-            let mut slot = db.slot_at(ts).await.unwrap();
+            let slot = db.slot_at(ts).await.unwrap();
             slot.counter("test-1", i as f64).await.unwrap();
         }
         let mut counters = db
             .counters(now.checked_sub(time::Duration::from_secs(60) * 10).unwrap())
             .await
             .unwrap();
-        let counter = counters.next().unwrap();
-        assert_eq!(counter.value, 10.0);
+        let (_, value) = counters.next().unwrap();
+        assert_eq!(value, 10.0);
         assert!(counters.next().is_none());
     }
 
@@ -400,7 +363,7 @@ mod test {
         let path = file.path();
         let window = time::Duration::from_secs(60);
         let retention = 10 * window;
-        let mut db = crate::rrd::SqliteRRD::new(path, window, retention)
+        let db = crate::rrd::SqliteRRD::new(path, window, retention)
             .await
             .unwrap();
         let now = SystemTime::now();
@@ -408,7 +371,7 @@ mod test {
         let first = now_secs - 5 * window.as_secs() as i64;
         let mut expected: f64 = 0.0;
         for i in 0..5 {
-            let mut slot = db.slot_at(first + i * 60).await.unwrap();
+            let slot = db.slot_at(first + i * 60).await.unwrap();
             let inc: f64 = rand::thread_rng().gen_range(0.0..10.0);
             if i != 0 {
                 expected += inc;
@@ -419,8 +382,8 @@ mod test {
             .counters(now.checked_sub(time::Duration::from_secs(60) * 10).unwrap())
             .await
             .unwrap();
-        let counter = counters.next().unwrap();
-        assert_eq!(counter.value, expected);
+        let (_, value) = counters.next().unwrap();
+        assert_eq!(value, expected);
         assert!(counters.next().is_none());
     }
 
@@ -435,16 +398,16 @@ mod test {
             .unwrap();
         let now = SystemTime::now();
         let now_secs = now.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
-        let mut slot1 = db.slot_at(now_secs - 3 * 60).await.unwrap();
+        let slot1 = db.slot_at(now_secs - 3 * 60).await.unwrap();
         slot1.counter("test-1", 100.0).await.unwrap();
-        let mut slot_now = db.slot_at(now_secs).await.unwrap();
+        let slot_now = db.slot_at(now_secs).await.unwrap();
         slot_now.counter("test-1", 120.0).await.unwrap();
         let mut counters = db
             .counters(now.checked_sub(time::Duration::from_secs(60) * 5).unwrap())
             .await
             .unwrap();
-        let counter = counters.next().unwrap();
-        assert_eq!(counter.value, 20.0);
+        let (_, value) = counters.next().unwrap();
+        assert_eq!(value, 20.0);
         assert!(counters.next().is_none());
     }
 
@@ -483,9 +446,9 @@ mod test {
         let now_secs = now.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
         let last = db.last("test-1").await.unwrap();
         assert!(last.is_none());
-        let mut slot1 = db.slot_at(now_secs - 5 * 60).await.unwrap();
+        let slot1 = db.slot_at(now_secs - 5 * 60).await.unwrap();
         slot1.counter("test-1", 100.0).await.unwrap();
-        let mut slot2 = db.slot_at(now_secs - 2 * 60).await.unwrap();
+        let slot2 = db.slot_at(now_secs - 2 * 60).await.unwrap();
         slot2.counter("test-1", 120.0).await.unwrap();
         let last = db.last("test-1").await.unwrap();
         assert!(last.is_some());
@@ -498,13 +461,13 @@ mod test {
         let path = file.path();
         let window = time::Duration::from_secs(60) * 5;
         let retention = 24 * 60 * time::Duration::from_secs(60);
-        let mut db = crate::rrd::SqliteRRD::new(path, window, retention)
+        let db = crate::rrd::SqliteRRD::new(path, window, retention)
             .await
             .unwrap();
         let now = SystemTime::now();
         let now_secs = now.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64;
         let mut last_report_time = now_secs;
-        let mut slot1 = db.slot_at(last_report_time - 5 * 60).await.unwrap();
+        let slot1 = db.slot_at(last_report_time - 5 * 60).await.unwrap();
         slot1.counter("test-0", 0.0).await.unwrap();
         let mut total: f64 = 0.0;
         for i in 0..25 {
@@ -513,10 +476,10 @@ mod test {
                     .counters(UNIX_EPOCH + time::Duration::from_secs(last_report_time as u64))
                     .await
                     .unwrap();
-                let counter = counters.next().unwrap();
+                let (_, value) = counters.next().unwrap();
                 assert!(counters.next().is_none());
-                assert_eq!(counter.value, 6.0);
-                total += counter.value;
+                assert_eq!(value, 6.0);
+                total += value;
             }
             let mut slot = db.slot_at(now_secs + 60 * 5 * i).await.unwrap();
             slot.counter("test-0", (i as f64) + 1.0).await.unwrap();
