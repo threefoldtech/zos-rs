@@ -4,6 +4,7 @@ pub mod cache;
 pub mod env;
 pub mod flist;
 pub mod kernel;
+pub mod rrd;
 pub mod storage;
 pub mod system;
 pub mod versioned;
