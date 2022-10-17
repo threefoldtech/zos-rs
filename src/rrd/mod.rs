@@ -22,7 +22,7 @@ pub trait Slot {
     /// with value
     async fn counter(&self, key: &str, value: f64) -> Result<()>;
     /// Key return the key of the slot which is the window timestamp
-    async fn key(&self) -> Result<i64>;
+    fn key(&self) -> i64;
 }
 
 /// RRD is a round robin database of fixed size which is specified on creation
@@ -103,9 +103,8 @@ impl<'a> Slot for SqliteSlot<'a> {
         Ok(())
     }
 
-    async fn key(&self) -> Result<i64> {
-        let k = self.key;
-        Ok(k)
+    fn key(&self) -> i64 {
+        self.key
     }
 }
 
@@ -312,7 +311,7 @@ mod test {
             .unwrap()
             .as_secs() as i64;
         let slot = db.slot().await.unwrap();
-        let key = slot.key().await.unwrap();
+        let key = slot.key();
         let w = window.as_secs() as i64;
         assert_eq!((now / w) * w, key);
         slot.counter("test1", 1234.5).await.unwrap();
@@ -496,7 +495,7 @@ mod test {
             let slot = db.slot_at(now_secs + 60 * 5 * i).await.unwrap();
             slot.counter("test-0", (i as f64) + 1.0).await.unwrap();
             if i % 6 == 0 && i != 0 {
-                last_report_time = slot.key().await.unwrap();
+                last_report_time = slot.key();
             }
         }
         assert_eq!(24.0, total);
