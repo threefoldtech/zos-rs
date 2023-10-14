@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::bus::types::{
     net::{ExitDevice, IPNet, OptionPublicConfig},
     stats::{Capacity, TimesStat, VirtualMemory},
@@ -81,25 +83,26 @@ pub trait Flist {
     /// create a new flist mount with unique name "name" and using the flist at url.
     /// using the mount options options.
     #[rename("Mount")]
-    async fn mount(name: String, url: String, options: storage::MountOptions) -> Result<String>;
+    async fn mount(
+        &self,
+        name: String,
+        url: String,
+        options: storage::MountOptions,
+    ) -> Result<PathBuf>;
 
     /// unmount mount with name
     #[rename("Unmount")]
-    async fn unmount(name: String) -> Result<()>;
+    async fn unmount(&self, name: String) -> Result<()>;
 
     // UpdateMountSize change the mount size
     #[rename("UpdateMountSize")]
-    async fn update(name: String, size: Unit) -> Result<String>;
+    async fn update(&self, name: String, size: Unit) -> Result<PathBuf>;
 
     /// return the hash of the flist used to create the mount `name`
     #[rename("HashFromRootPath")]
-    async fn hash_of_mount(name: String) -> Result<String>;
-
-    /// return the hash of the flist at url
-    #[rename("FlistHash")]
-    async fn hash_of_flist(url: String) -> Result<String>;
+    async fn hash_of_mount(&self, name: String) -> Result<String>;
 
     /// exists checks if a mount with that name exists
     #[rename("Exists")]
-    async fn exists(name: String) -> Result<bool>;
+    async fn exists(&self, name: String) -> Result<bool>;
 }

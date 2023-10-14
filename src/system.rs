@@ -170,6 +170,23 @@ impl Syscalls for System {
     }
 }
 
+pub struct Mockyscalls;
+impl Syscalls for Mockyscalls {
+    fn mount<S: AsRef<Path>, T: AsRef<Path>, F: AsRef<str>, D: AsRef<str>>(
+        &self,
+        _source: Option<S>,
+        _target: T,
+        _fstype: Option<F>,
+        _flags: MsFlags,
+        _data: Option<D>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    fn umount<T: AsRef<Path>>(&self, _target: T, _flags: Option<MntFlags>) -> Result<(), Error> {
+        Ok(())
+    }
+}
 #[cfg(test)]
 mod test {
     use super::{Command, Error, Executor, System};

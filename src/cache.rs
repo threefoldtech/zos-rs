@@ -48,7 +48,7 @@ impl<T> Store<T> {
         let path = volatile(name, size).await?;
 
         Ok(Store {
-            path: path,
+            path,
             phantom: PhantomData::default(),
         })
     }

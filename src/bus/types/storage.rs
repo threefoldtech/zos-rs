@@ -1,5 +1,6 @@
 use crate::Unit;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Defined the type of write volume
 pub enum WriteLayer {
@@ -7,7 +8,7 @@ pub enum WriteLayer {
     /// be deleted once the mount is unmounted
     Size(Unit),
     /// Path to write layer
-    Path(String),
+    Path(PathBuf),
 }
 
 /// MountMode
@@ -34,7 +35,7 @@ impl MountOptions {
     }
 
     /// creates a read-write mount options with a write layer with given path
-    pub fn path<S: Into<String>>(path: S) -> Self {
+    pub fn path<S: Into<PathBuf>>(path: S) -> Self {
         MountOptions {
             mode: MountMode::ReadWrite(WriteLayer::Path(path.into())),
             storage: None,
@@ -75,9 +76,9 @@ impl Serialize for MountOptions {
                 String::default()
             },
             persisted_volume: if let MountMode::ReadWrite(WriteLayer::Path(path)) = &self.mode {
-                path.clone()
+                path.to_path_buf()
             } else {
-                String::default()
+                PathBuf::from("")
             },
         };
 
@@ -95,7 +96,7 @@ impl<'de> Deserialize<'de> for MountOptions {
         Ok(MountOptions {
             mode: if opts.read_only {
                 MountMode::ReadOnly
-            } else if opts.persisted_volume.is_empty() {
+            } else if opts.persisted_volume.as_os_str().is_empty() {
                 MountMode::ReadWrite(WriteLayer::Size(opts.limit))
             } else {
                 MountMode::ReadWrite(WriteLayer::Path(opts.persisted_volume))
@@ -118,11 +119,13 @@ struct GoMountOptions {
     #[serde(rename = "Storage")]
     storage: String,
     #[serde(rename = "PersistedVolume")]
-    persisted_volume: String,
+    persisted_volume: PathBuf,
 }
 
 #[cfg(test)]
 mod test {
+    use std::path::PathBuf;
+
     use super::{MountMode, MountOptions, WriteLayer};
     use serde::de::DeserializeOwned;
 
@@ -154,7 +157,7 @@ mod test {
         let opts: MountOptions = decode(data).unwrap();
         assert!(matches!(
             opts.mode,
-            MountMode::ReadWrite(WriteLayer::Path(path)) if path == "/some/path"
+            MountMode::ReadWrite(WriteLayer::Path(path)) if path == PathBuf::from("/some/path")
         ));
         assert_eq!(opts.storage, None);
 
@@ -163,7 +166,7 @@ mod test {
         let opts: MountOptions = decode(data).unwrap();
         assert!(matches!(
             opts.mode,
-            MountMode::ReadWrite(WriteLayer::Path(path)) if path == "/some/path"
+            MountMode::ReadWrite(WriteLayer::Path(path)) if path == PathBuf::from("/some/path")
         ));
         assert!(matches!(opts.storage, Some(storage) if storage == "https://custom.hub"));
     }
